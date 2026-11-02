@@ -1,0 +1,10 @@
+[project]
+name = "pitwall"
+version = "0.1.0"
+description = "PITWALL proof-of-concept: 1v1 F1 opponent prediction + counter-strategy"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "streamlit", "plotly", "fastf1"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
