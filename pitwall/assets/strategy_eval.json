@@ -1,0 +1,80 @@
+{
+ "races": 300,
+ "table": {
+  "PITWALL": {
+   "p_ahead": 0.6966666666666667,
+   "mean_gap": 17.231061429468323,
+   "mean_stops": 2.236666666666667,
+   "pitwall_gain_s": 0.0,
+   "pitwall_gain_s_ci95": [
+    0.0,
+    0.0
+   ],
+   "pitwall_gain_wins": 0.0,
+   "pitwall_gain_wins_ci95": [
+    0.0,
+    0.0
+   ]
+  },
+  "PITWALL ignoring opponent": {
+   "p_ahead": 0.6966666666666667,
+   "mean_gap": 16.91880416932037,
+   "mean_stops": 2.32,
+   "pitwall_gain_s": 0.31225726014795335,
+   "pitwall_gain_s_ci95": [
+    -0.09060862761797106,
+    0.7190833123041389
+   ],
+   "pitwall_gain_wins": 0.0,
+   "pitwall_gain_wins_ci95": [
+    -0.016666666666666666,
+    0.016666666666666666
+   ]
+  },
+  "reactive (cover their stop)": {
+   "p_ahead": 0.44,
+   "mean_gap": 2.590058093092598,
+   "mean_stops": 1.85,
+   "pitwall_gain_s": 14.641003336375725,
+   "pitwall_gain_s_ci95": [
+    12.335796982509263,
+    16.884523124635994
+   ],
+   "pitwall_gain_wins": 0.25666666666666665,
+   "pitwall_gain_wins_ci95": [
+    0.2,
+    0.31
+   ]
+  },
+  "tyre-age rule": {
+   "p_ahead": 0.49666666666666665,
+   "mean_gap": 4.413546740430506,
+   "mean_stops": 2.0,
+   "pitwall_gain_s": 12.81751468903782,
+   "pitwall_gain_s_ci95": [
+    11.891034607749278,
+    13.822377761718592
+   ],
+   "pitwall_gain_wins": 0.2,
+   "pitwall_gain_wins_ci95": [
+    0.15666666666666668,
+    0.24666666666666667
+   ]
+  },
+  "fixed one-stop": {
+   "p_ahead": 0.35333333333333333,
+   "mean_gap": -9.778481960948124,
+   "mean_stops": 1.0,
+   "pitwall_gain_s": 27.009543390416443,
+   "pitwall_gain_s_ci95": [
+    24.561671640954945,
+    29.648106090606923
+   ],
+   "pitwall_gain_wins": 0.3433333333333333,
+   "pitwall_gain_wins_ci95": [
+    0.2833333333333333,
+    0.39674999999999955
+   ]
+  }
+ }
+}

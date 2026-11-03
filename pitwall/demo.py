@@ -1,151 +1,140 @@
-"""End-to-end PITWALL demo (Modules 1→7).
+"""End-to-end PITWALL pipeline (Modules 1→7).
 
-Pipeline per decision lap, using ONLY laps <= lap (no future leakage):
+Per decision lap, using ONLY laps <= lap (no future leakage):
   Replay → DegradationEstimator → PitHazardModel → ThreatDetector
       → OwnCarModel → Monte Carlo simulator → optimiser → recommendation.
 
 Usage:
-    python -m pitwall.demo [--lap 12] [--theta 0.5] [--seed-train 1] [--seed-demo 7]
-    python -m pitwall.demo --backtest
+    python -m pitwall.demo                          # synthetic race, lap 13
+    python -m pitwall.demo --race 2023 Sakhir --own ALO --opp VER --lap 12
+    python -m pitwall.demo --backtest               # held-out real-race scores
 """
 from __future__ import annotations
 
 import argparse
+import json
 
 import numpy as np
 
-from .data import generate_race
-from .state import Replay
+from .data import generate_race, load_bundled_replay
 from .degradation import DegradationEstimator
-from .pit_model import PitHazardModel, brier_score, log_loss, age_only_baseline
 from .owncar import OwnCarModel
-from .threshold import ThreatDetector
-from .simulator import simulate_action
+from .pit_model import PitHazardModel, WEIGHTS, load_models
 from .optimizer import optimise
+from .simulator import CarInputs, SimInputs, action_label, simulate_actions, valid_actions
+from .state import Replay, WET_COMPOUNDS
+from .threshold import ThreatDetector, Trigger, expected_loss
 
-OFFSETS = [0, 1, 2, 3]
-HORIZON = 8
+WINDOW = 3     # candidate actions: pit now, +1, +2, +3, or stay out
 N_SIMS = 1000
+# A slope error compounds over every remaining lap, and short noisy stints can report
+# a very large one. This cap keeps the tails from being set by extrapolation alone.
+MAX_SLOPE_SE = 0.03
 
 
-def build_models(seed_train: int = 1):
-    """Train on several synthetic races with varied pit windows (more positives)."""
-    windows = [(12, 26), (13, 27), (14, 28), (15, 29),
-               (13, 28), (12, 27), (14, 29), (16, 30)]
-    trains = [generate_race(seed=seed_train * 100 + i,
-                             opp_pit_laps=w, own_pit_laps=(w[0] + 1, w[1] + 1))
-              for i, w in enumerate(windows)]
-    pit = PitHazardModel().fit(trains)
-    return trains, pit
+def _monitor(lap: int, theta: float, reason: str, p3: float = 0.0, fc=None, est=None,
+             own=None) -> dict:
+    return {"lap": lap, "p3": p3, "trigger": Trigger(False, "MONITOR", reason, p3, 3, theta),
+            "forecast": fc, "est": est, "own_model": own}
 
 
 def decide_at(lap: int, theta: float = 0.5, seed_demo: int = 7,
               pit: PitHazardModel | None = None, verbose: bool = True) -> dict:
-    """Pipeline on the synthetic demo race (wrapper, behaviour unchanged)."""
+    """Pipeline on the synthetic demo race."""
     demo = generate_race(seed=seed_demo, opp_pit_laps=(14, 28), own_pit_laps=(15, 29))
     return decide_on_replay(demo, lap, theta, pit, verbose)
 
 
 def decide_on_replay(replay: Replay, lap: int, theta: float = 0.5,
-                     pit: PitHazardModel | None = None,
-                     verbose: bool = True) -> dict:
-    """Full pipeline on any Replay (synthetic or FastF1-loaded)."""
+                     pit: PitHazardModel | None = None, verbose: bool = True,
+                     overtake_delta: float = 1.0, n_sims: int = N_SIMS,
+                     pit_dist_override: list[float] | None = None) -> dict:
+    """Full pipeline on any Replay. Never raises for a lap the replay contains."""
     if pit is None:
-        _, pit = build_models()
+        pit, _ = load_models()
     snap = replay.state_at(lap)  # leakage-free: history <= lap only
+    if snap.laps_left <= 0:
+        return _monitor(lap, theta, "race finished")
+    if {snap.own.compound, snap.opp.compound} & WET_COMPOUNDS:
+        return _monitor(lap, theta, "wet conditions: the models only cover dry running")
     try:
         deg = DegradationEstimator().fit(snap.history_opp, replay.laps_total)
     except ValueError:
-        from .threshold import Trigger as _Trigger
-        if verbose:
-            print(f"--- lap {lap}: insufficient clean laps → MONITOR (model not ready).")
-        return {"lap": lap, "p3": 0.0,
-                "trigger": _Trigger(False, "MONITOR", "insufficient history", 0.0, 3, theta),
-                "forecast": None, "est": None}
+        return _monitor(lap, theta, "opponent model not ready: too few clean laps")
     est = deg.estimate(snap.history_opp, replay.laps_total, lap)
-    fc = pit.forecast(snap, est.penalty, est.slope, k=5)
+    fc = pit.forecast(snap, deg, k=5)
     p3 = fc.p_within[3]
-    # crude expected-loss proxy: p3 * fresh-tyre advantage over 3 laps
-    exp_loss = p3 * max(0.0, est.slope) * 3 * 10
-    trig = ThreatDetector(theta=theta, horizon=3).check(p3, exp_loss)
+    try:
+        own = OwnCarModel().fit(snap.history_own, replay.laps_total)
+    except ValueError:
+        return _monitor(lap, theta, "own-car model not ready: too few clean laps", p3, fc, est)
+    loss = expected_loss(p3, own.penalty_at(snap.own.next_age, snap.own.compound),
+                         snap.effective_gap, snap.pit_loss)
+    trig = ThreatDetector(theta=theta, horizon=3).check(p3, loss, snap.opp.just_pitted)
     if verbose:
-        print(f"--- lap {lap} | gap(own behind opp)={snap.gap_own_behind_opp:+.1f}s "
+        print(f"--- lap {lap}/{replay.laps_total} | gap(own behind opp)={snap.effective_gap:+.1f}s "
               f"| opp {snap.opp.compound} age {snap.opp.tyre_age} | "
-              f"own {snap.own.compound} age {snap.own.tyre_age}")
+              f"own {snap.own.compound} age {snap.own.tyre_age} | pit loss {snap.pit_loss:.1f}s")
         print(f"OPP deg: penalty={est.penalty:+.2f}s slope={est.slope:+.3f}s/lap "
               f"next-lap forecast={est.forecast[0]:.2f}s ±{est.std:.2f}")
         print("OPP hazards:", " ".join(f"L{lap + j}={h:.0%}" for j, h in enumerate(fc.hazards, 1)))
         print(f"P(pit within 3)={p3:.0%} → {trig.status} ({trig.reason})")
-    out: dict = {"lap": lap, "p3": p3, "trigger": trig, "forecast": fc, "est": est}
+    out: dict = {"lap": lap, "p3": p3, "trigger": trig, "forecast": fc, "est": est,
+                 "own_model": own}
     if not trig.active:
         if verbose:
             print("No counter-strategy simulation (monitoring only).")
         return out
-    own = OwnCarModel().fit(snap.history_own, replay.laps_total)
-    own_stay = own.predict_stay(snap.own.tyre_age, lap, replay.laps_total, snap.track_temp, HORIZON)
-    own_fresh = own.predict_fresh(lap, replay.laps_total, snap.track_temp, HORIZON)
-    opp_stay = list(est.forecast) + [est.forecast[-1] + est.slope * i for i in range(1, HORIZON - 4)]
-    clean = [r.lap_time for r in snap.history_opp[-6:] if not r.pitted and not r.safety_car]
-    opp_fresh = (min(clean) - 0.3) if clean else est.forecast[0] - 1.0
-    rng = np.random.default_rng(0)
-    results = [simulate_action(own_stay, own_fresh, opp_stay[:HORIZON], opp_fresh,
-                               fc.pit_dist, snap.gap_own_behind_opp, replay.pit_loss,
-                               a, opp_stay[:HORIZON], HORIZON,
-                               (own.std_ + est.std) / 2, N_SIMS, rng) for a in OFFSETS]
-    rec = optimise(results, opp_p3=p3)
+    own_slope = min(own.estimate(snap.history_own, replay.laps_total, lap).slope_se, MAX_SLOPE_SE)
+    inp = SimInputs(
+        lap=lap, laps_total=replay.laps_total, gap0=snap.effective_gap,
+        pit_loss=snap.pit_loss,
+        own=CarInputs(own, snap.own.next_age, None if snap.own.just_pitted else snap.own.compound,
+                      snap.own.must_stop, own.resid_std_, own_slope),
+        opp=CarInputs(deg, snap.opp.next_age, None if snap.opp.just_pitted else snap.opp.compound,
+                      snap.opp.must_stop, deg.resid_std_, min(est.slope_se, MAX_SLOPE_SE)),
+        pit_dist=pit_dist_override if pit_dist_override is not None else fc.pit_dist,
+        overtake_delta=overtake_delta)
+    actions = valid_actions(lap, replay.laps_total, snap.own.next_age, snap.own.must_stop, WINDOW)
+    results = simulate_actions(inp, actions, n_sims, np.random.default_rng(lap), WINDOW)
+    rec = optimise(results, snap.pit_loss, snap.effective_gap, p3, snap.opp.just_pitted)
     if verbose:
-        print("\nCounter-strategy (Monte Carlo, n=1000/action):")
+        print(f"\nCounter-strategy (Monte Carlo to the flag, n={n_sims}/action):")
         for r in results:
-            print(f"  pit +{r.our_pit_offset}: P(ahead)={r.p_ahead:.0%} "
-                  f"exp_gap={r.exp_gap:+.1f}s worst5={r.risk:+.1f}s")
+            print(f"  {r.action:9s}: P(ahead)={r.p_ahead:.0%} exp_gap={r.exp_gap:+.1f}s "
+                  f"worst5={r.risk:+.1f}s  planned stops at laps {list(r.stops)}")
         print(f"\nRECOMMENDATION: {rec.explanation}")
-        actual = next((r.lap for r in replay._opp_list if r.pitted and r.lap > lap), None)
-        print(f"(History check: opponent actually pitted next at lap {actual}.)")
     out.update({"results": results, "recommendation": rec})
     return out
 
 
-def backtest(seed_demo: int = 7) -> dict:
-    """Score pit model over every lap of a held-out synthetic race vs age-only baseline."""
-    _, pit = build_models()
-    demo = generate_race(seed=seed_demo, opp_pit_laps=(14, 28), own_pit_laps=(15, 29))
-    ys, ps, bs = [], [], []
-    for lap in demo.available_laps():
-        snap = demo.state_at(lap)
-        hist = list(snap.history_opp)
-        if len([r for r in hist if not r.pitted and not r.safety_car]) < 6:
-            continue
-        deg = DegradationEstimator().fit(hist, demo.laps_total)
-        est = deg.estimate(hist, demo.laps_total, lap)
-        f = PitHazardModel.feats(snap.opp.tyre_age, lap, demo.laps_total,
-                                 est.penalty, -snap.gap_own_behind_opp, snap.opp.stops_done)
-        ps.append(pit.hazard(f))
-        bs.append(age_only_baseline(snap.opp.tyre_age))
-        rec = next(r for r in hist if r.lap == lap)
-        ys.append(1.0 if rec.pitted else 0.0)
-    y = np.asarray(ys)
-    out = {"n": len(y), "brier_model": brier_score(y, np.asarray(ps)),
-           "brier_base": brier_score(y, np.asarray(bs)),
-           "ll_model": log_loss(y, np.asarray(ps)), "ll_base": log_loss(y, np.asarray(bs))}
-    print(f"Backtest on held-out race ({out['n']} decision laps):")
-    print(f"  Brier  model={out['brier_model']:.4f}  baseline={out['brier_base']:.4f}")
-    print(f"  LogLoss model={out['ll_model']:.4f}  baseline={out['ll_base']:.4f}")
-    return out
+def print_backtest() -> dict:
+    """Show the held-out real-race scores produced by pitwall.train_hazard."""
+    m = json.loads(WEIGHTS.read_text())["metrics"]
+    print(f"Trained on {m['train']['races']} races ({m['train']['years']}), "
+          f"tested on {m['test']['races']} unseen races ({m['test']['years']}).")
+    for k in ("model", "baseline", "base_rate"):
+        print(f"  {k:10s} Brier={m['test'][k]['brier']:.4f}  LogLoss={m['test'][k]['log_loss']:.4f}")
+    return m
 
 
 def main(argv: list[str] | None = None):
-    ap = argparse.ArgumentParser(description="PITWALL proof-of-concept demo")
+    ap = argparse.ArgumentParser(description="PITWALL demo")
     ap.add_argument("--lap", type=int, default=13)
     ap.add_argument("--theta", type=float, default=0.3)
-    ap.add_argument("--seed-train", type=int, default=1)
     ap.add_argument("--seed-demo", type=int, default=7)
+    ap.add_argument("--race", nargs=2, metavar=("YEAR", "CIRCUIT"))
+    ap.add_argument("--own", default="ALO")
+    ap.add_argument("--opp", default="VER")
     ap.add_argument("--backtest", action="store_true")
     a = ap.parse_args(argv)
-    _, pit = build_models(a.seed_train)
     if a.backtest:
-        backtest(a.seed_demo)
+        print_backtest()
+    elif a.race:
+        replay = load_bundled_replay(int(a.race[0]), a.race[1], a.own, a.opp)
+        decide_on_replay(replay, a.lap, a.theta)
     else:
-        decide_at(a.lap, a.theta, a.seed_demo, pit)
+        decide_at(a.lap, a.theta, a.seed_demo)
 
 
 if __name__ == "__main__":
