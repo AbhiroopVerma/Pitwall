@@ -1,0 +1,323 @@
+{
+ "settings": {
+  "pairs_per_race": 4,
+  "sims": 300,
+  "pace_tau": 0.0001,
+  "pace_sd": 0.0,
+  "prior_strength": 10.0,
+  "gap_only_spread": 0.75,
+  "win_a": 0.72,
+  "win_b": 0.234
+ },
+ "train_2023_24": {
+  "win_brier_simulated": 0.1086,
+  "decisions": 7440,
+  "win_brier": 0.1058,
+  "win_brier_current_order": 0.1507,
+  "win_brier_coinflip": 0.25,
+  "win_brier_gap_only": 0.1286,
+  "gap_mae": 11.64,
+  "gap_mae_hold": 13.29,
+  "by_horizon": {
+   "1-10": {
+    "n": 1391,
+    "win_brier": 0.0332,
+    "current_order_brier": 0.0309,
+    "gap_only_brier": 0.0271,
+    "gap_mae": 4.56,
+    "hold_mae": 4.73
+   },
+   "11-25": {
+    "n": 2148,
+    "win_brier": 0.0867,
+    "current_order_brier": 0.1336,
+    "gap_only_brier": 0.1178,
+    "gap_mae": 8.98,
+    "hold_mae": 11.73
+   },
+   "26-999": {
+    "n": 3901,
+    "win_brier": 0.1421,
+    "current_order_brier": 0.2028,
+    "gap_only_brier": 0.1708,
+    "gap_mae": 15.63,
+    "hold_mae": 17.21
+   }
+  },
+  "reliability": [
+   {
+    "said": "0%-10%",
+    "n": 1838,
+    "mean_said": 0.029,
+    "happened": 0.029
+   },
+   {
+    "said": "10%-30%",
+    "n": 1021,
+    "mean_said": 0.193,
+    "happened": 0.132
+   },
+   {
+    "said": "30%-50%",
+    "n": 1031,
+    "mean_said": 0.398,
+    "happened": 0.306
+   },
+   {
+    "said": "50%-70%",
+    "n": 923,
+    "mean_said": 0.596,
+    "happened": 0.666
+   },
+   {
+    "said": "70%-90%",
+    "n": 786,
+    "mean_said": 0.8,
+    "happened": 0.838
+   },
+   {
+    "said": "90%-100%",
+    "n": 1841,
+    "mean_said": 0.979,
+    "happened": 0.954
+   }
+  ],
+  "rejoin": {
+   "n": 237,
+   "mean_abs_places": 1.95,
+   "exact": 0.308,
+   "within_1": 0.574,
+   "within_2": 0.734
+  },
+  "next_lap_pace_mae": 0.468,
+  "pace_10_laps_ahead": {
+   "n": 3992,
+   "mae": 0.638,
+   "bias": -0.146
+  },
+  "plan_vs_team_5_laps_before": {
+   "n": 197,
+   "median_abs_laps": 4.0,
+   "within_3": 0.386
+  },
+  "calc_ms": {
+   "median": 4.2,
+   "p99": 8.4,
+   "max": 19.4
+  },
+  "call_changes_per_race": 3.52,
+  "rival_stops_flagged": {
+   "stops": 269,
+   "flagged": 94,
+   "share": 0.349
+  }
+ },
+ "2025": {
+  "races": 21,
+  "win_brier_simulated": 0.1225,
+  "decisions": 3663,
+  "win_brier": 0.1112,
+  "win_brier_current_order": 0.1548,
+  "win_brier_coinflip": 0.25,
+  "win_brier_gap_only": 0.1291,
+  "gap_mae": 13.86,
+  "gap_mae_hold": 11.33,
+  "by_horizon": {
+   "1-10": {
+    "n": 679,
+    "win_brier": 0.0572,
+    "current_order_brier": 0.0501,
+    "gap_only_brier": 0.0415,
+    "gap_mae": 5.99,
+    "hold_mae": 4.54
+   },
+   "11-25": {
+    "n": 1047,
+    "win_brier": 0.0769,
+    "current_order_brier": 0.1223,
+    "gap_only_brier": 0.1039,
+    "gap_mae": 11.86,
+    "hold_mae": 11.24
+   },
+   "26-999": {
+    "n": 1937,
+    "win_brier": 0.1486,
+    "current_order_brier": 0.2091,
+    "gap_only_brier": 0.1734,
+    "gap_mae": 17.7,
+    "hold_mae": 13.76
+   }
+  },
+  "reliability": [
+   {
+    "said": "0%-10%",
+    "n": 679,
+    "mean_said": 0.029,
+    "happened": 0.031
+   },
+   {
+    "said": "10%-30%",
+    "n": 470,
+    "mean_said": 0.205,
+    "happened": 0.157
+   },
+   {
+    "said": "30%-50%",
+    "n": 609,
+    "mean_said": 0.396,
+    "happened": 0.384
+   },
+   {
+    "said": "50%-70%",
+    "n": 499,
+    "mean_said": 0.6,
+    "happened": 0.709
+   },
+   {
+    "said": "70%-90%",
+    "n": 501,
+    "mean_said": 0.801,
+    "happened": 0.862
+   },
+   {
+    "said": "90%-100%",
+    "n": 905,
+    "mean_said": 0.975,
+    "happened": 0.981
+   }
+  ],
+  "rejoin": {
+   "n": 117,
+   "mean_abs_places": 1.61,
+   "exact": 0.342,
+   "within_1": 0.615,
+   "within_2": 0.761
+  },
+  "next_lap_pace_mae": 0.47,
+  "pace_10_laps_ahead": {
+   "n": 2034,
+   "mae": 0.692,
+   "bias": 0.007
+  },
+  "plan_vs_team_5_laps_before": {
+   "n": 104,
+   "median_abs_laps": 4.0,
+   "within_3": 0.375
+  },
+  "calc_ms": {
+   "median": 4.9,
+   "p99": 23.9,
+   "max": 2724.3
+  },
+  "call_changes_per_race": 4.71,
+  "rival_stops_flagged": {
+   "stops": 130,
+   "flagged": 45,
+   "share": 0.346
+  }
+ },
+ "2026": {
+  "races": 18,
+  "win_brier_simulated": 0.1364,
+  "decisions": 3091,
+  "win_brier": 0.1294,
+  "win_brier_current_order": 0.2193,
+  "win_brier_coinflip": 0.25,
+  "win_brier_gap_only": 0.1697,
+  "gap_mae": 14.49,
+  "gap_mae_hold": 15.24,
+  "by_horizon": {
+   "1-10": {
+    "n": 555,
+    "win_brier": 0.0386,
+    "current_order_brier": 0.0432,
+    "gap_only_brier": 0.0261,
+    "gap_mae": 7.21,
+    "hold_mae": 5.92
+   },
+   "11-25": {
+    "n": 892,
+    "win_brier": 0.1132,
+    "current_order_brier": 0.1816,
+    "gap_only_brier": 0.1563,
+    "gap_mae": 12.55,
+    "hold_mae": 14.77
+   },
+   "26-999": {
+    "n": 1644,
+    "win_brier": 0.1688,
+    "current_order_brier": 0.2993,
+    "gap_only_brier": 0.2253,
+    "gap_mae": 17.99,
+    "hold_mae": 18.64
+   }
+  },
+  "reliability": [
+   {
+    "said": "0%-10%",
+    "n": 737,
+    "mean_said": 0.027,
+    "happened": 0.035
+   },
+   {
+    "said": "10%-30%",
+    "n": 333,
+    "mean_said": 0.196,
+    "happened": 0.294
+   },
+   {
+    "said": "30%-50%",
+    "n": 496,
+    "mean_said": 0.406,
+    "happened": 0.456
+   },
+   {
+    "said": "50%-70%",
+    "n": 458,
+    "mean_said": 0.599,
+    "happened": 0.67
+   },
+   {
+    "said": "70%-90%",
+    "n": 329,
+    "mean_said": 0.789,
+    "happened": 0.812
+   },
+   {
+    "said": "90%-100%",
+    "n": 738,
+    "mean_said": 0.98,
+    "happened": 0.953
+   }
+  ],
+  "rejoin": {
+   "n": 97,
+   "mean_abs_places": 1.76,
+   "exact": 0.423,
+   "within_1": 0.67,
+   "within_2": 0.753
+  },
+  "next_lap_pace_mae": 0.483,
+  "pace_10_laps_ahead": {
+   "n": 1604,
+   "mae": 0.672,
+   "bias": 0.014
+  },
+  "plan_vs_team_5_laps_before": {
+   "n": 82,
+   "median_abs_laps": 4.0,
+   "within_3": 0.366
+  },
+  "calc_ms": {
+   "median": 5.2,
+   "p99": 21.5,
+   "max": 1260.9
+  },
+  "call_changes_per_race": 4.99,
+  "rival_stops_flagged": {
+   "stops": 101,
+   "flagged": 43,
+   "share": 0.426
+  }
+ }
+}

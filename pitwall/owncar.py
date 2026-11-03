@@ -28,7 +28,7 @@ class OwnCarModel(DegradationEstimator):
         wear = [r.private_wear for r in recs]
         if any(w is None for w in wear):
             self.uses_private_signal = False
-            return _fit_curve(curve, base, y, self.ridge)
+            return _fit_curve(curve, base, y, self.ridge, self.prior)
         self.uses_private_signal = True
         wear = np.asarray(wear, float)
         coef, _, _ = _fit_curve(curve, np.zeros((len(y), 0)), wear, self.ridge)

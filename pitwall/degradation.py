@@ -63,12 +63,14 @@ def _curve_columns(ages: np.ndarray, factors: np.ndarray) -> np.ndarray:
     return np.column_stack([a, a ** 2])
 
 
-def _fit_curve(curve: np.ndarray, base: np.ndarray, y: np.ndarray,
-               ridge: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _fit_curve(curve: np.ndarray, base: np.ndarray, y: np.ndarray, ridge: float,
+               prior: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Least squares with b1, b2 >= 0 via their small active set.
 
+    ``ridge`` pulls b1, b2 towards ``prior``, or towards zero without one.
     Returns (b1 b2, intercepts, posterior precision inverse for all columns).
     """
+    b0 = np.zeros(2) if prior is None else np.asarray(prior, float)
     nb = base.shape[1]
     best = None
     for mask in ((True, True), (True, False), (False, True), (False, False)):
@@ -78,10 +80,14 @@ def _fit_curve(curve: np.ndarray, base: np.ndarray, y: np.ndarray,
         if X.shape[1] == 0:
             coef = np.zeros(0)
         else:
-            coef = ridge_fit(X, y, lam)
+            target = X.T @ y
+            target[:len(cols)] += ridge * b0[cols]
+            coef = np.linalg.solve(X.T @ X + np.diag(lam), target)
         if len(cols) and np.any(coef[:len(cols)] < 0):
             continue
         rss = float(np.sum((y - X @ coef) ** 2)) if X.shape[1] else float(np.sum(y ** 2))
+        if len(cols):  # with a prior, the objective being minimised includes its pull
+            rss += ridge * float(np.sum((coef[:len(cols)] - b0[cols]) ** 2))
         if best is None or rss < best[0] - 1e-12:
             full = np.zeros(2)
             full[cols] = coef[:len(cols)]
@@ -103,11 +109,14 @@ class DegradationEstimate:
 
 
 class DegradationEstimator:
-    def __init__(self, ridge: float = 0.1, horizon: int = 5):
+    def __init__(self, ridge: float = 0.1, horizon: int = 5,
+                 prior: tuple[float, float] | None = None):
         self.ridge = ridge
         self.horizon = horizon
+        self.prior = prior  # wear curve expected before any lap is seen (b1, b2)
         self.coef_: np.ndarray | None = None  # [b1, b2]
         self.baseline_: float = 0.0           # fuel-free pace of the latest stint
+        self.race_baseline_: float = 0.0
         self.resid_std_: float = 0.25
         self.laps_total_: int = 0
         self.compound_: str | None = None
@@ -117,7 +126,7 @@ class DegradationEstimator:
     # -- fitting -----------------------------------------------------------------
     def _curve_target(self, recs: list[LapRecord], y: np.ndarray,
                       curve: np.ndarray, base: np.ndarray):
-        return _fit_curve(curve, base, y, self.ridge)
+        return _fit_curve(curve, base, y, self.ridge, self.prior)
 
     def fit(self, history: list[LapRecord], laps_total: int) -> "DegradationEstimator":
         kept = clean_laps(history, laps_total)
@@ -136,6 +145,9 @@ class DegradationEstimator:
         coef, intercepts, cov = self._curve_target(recs, y, curve, base)
         self.coef_ = coef
         self.baseline_ = float(intercepts[-1])
+        # Pace over the whole race so far, laps weighted: steadier than the latest stint.
+        counts = base.sum(axis=0)
+        self.race_baseline_ = float(np.sum(intercepts * counts) / np.sum(counts))
         resid = y - curve @ coef - base @ intercepts
         dof = max(len(y) - len(stints) - 2, 1)
         self.resid_std_ = max(float(np.sqrt(np.sum(resid ** 2) / dof)), MIN_STD)
