@@ -1,58 +1,48 @@
 """Module 4 — own-car pace model (asymmetric info).
 
-Same ridge engine as the opponent model BUT allowed one extra, clearly
-labelled SYNTHETIC private signal: true tyre wear (tyre_age + small noise).
-In a real team this slot takes real private telemetry; here it is synthetic
-and must never be presented as measured data.
+Uses the same model as the opponent, so neither car gets a built-in advantage.
+The extra information: when a private wear signal is available, the degradation
+curve is fitted to that signal instead of to noisy lap times.
+
+In the demo race the signal is clearly labelled SYNTHETIC (see
+``data.generate_race``). In a real team this slot takes private telemetry. On
+historical races there is no signal, so the model falls back to lap times.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from .degradation import ridge_fit
+from .degradation import (DegradationEstimator, _fit_curve)
 from .state import LapRecord
 
 
-class OwnCarModel:
-    def __init__(self, ridge: float = 1.0):
-        self.ridge = ridge
-        self.coef_: np.ndarray | None = None
-        self.std_: float = 0.25
+class OwnCarModel(DegradationEstimator):
+    uses_private_signal: bool = False
 
-    def fit(self, history: list[LapRecord], laps_total: int) -> "OwnCarModel":
-        X, y = [], []
-        for r in history:
-            if r.pitted or r.safety_car:
-                continue
-            fuel = (laps_total - r.lap) / laps_total
-            wear = r.tyre_age + np.sin(r.lap) * 0.05  # SYNTHETIC private wear proxy
-            X.append([1.0, r.tyre_age, r.tyre_age ** 2, fuel, r.track_temp, wear])
-            y.append(r.lap_time)
-        X, y = np.asarray(X, float), np.asarray(y, float)
-        if len(y) < 7:
-            raise ValueError("not enough own-car laps")
-        self.coef_ = ridge_fit(X, y, self.ridge)
-        self.std_ = float(np.std(y - X @ self.coef_, ddof=1)) or 0.25
-        return self
+    @property
+    def std_(self) -> float:
+        return self.resid_std_
 
-    def predict_stay(self, tyre_age_now: int, from_lap: int, laps_total: int,
-                     track_temp: float, steps: int) -> list[float]:
+    def _curve_target(self, recs: list[LapRecord], y: np.ndarray,
+                      curve: np.ndarray, base: np.ndarray):
+        wear = [r.private_wear for r in recs]
+        if any(w is None for w in wear):
+            self.uses_private_signal = False
+            return _fit_curve(curve, base, y, self.ridge)
+        self.uses_private_signal = True
+        wear = np.asarray(wear, float)
+        coef, _, _ = _fit_curve(curve, np.zeros((len(y), 0)), wear, self.ridge)
+        # With the curve known from the signal, only stint baselines remain.
+        rest = y - curve @ coef
+        intercepts = np.linalg.lstsq(base, rest, rcond=None)[0]
+        _, _, cov = _fit_curve(curve, base, y, self.ridge)
+        return coef, intercepts, cov
+
+    def predict_stay(self, tyre_age_now: int, from_lap: int, steps: int) -> list[float]:
         """Forecast if we stay out (age keeps growing)."""
-        b0, b1, b2, b3, b4, b5 = self.coef_
-        out = []
-        for k in range(1, steps + 1):
-            age = tyre_age_now + k
-            fuel = (laps_total - (from_lap + k)) / laps_total
-            out.append(float(b0 + b1 * age + b2 * age ** 2 + b3 * fuel + b4 * track_temp + b5 * age))
-        return out
+        return [self.pace(tyre_age_now + k, from_lap + k, self.compound_)
+                for k in range(1, steps + 1)]
 
-    def predict_fresh(self, from_lap: int, laps_total: int, track_temp: float,
-                      steps: int, new_compound_bonus: float = -0.4) -> list[float]:
-        """Forecast after pitting now (fresh tyre, age restarts at 1)."""
-        b0, b1, b2, b3, b4, b5 = self.coef_
-        out = []
-        for k in range(1, steps + 1):
-            fuel = (laps_total - (from_lap + k)) / laps_total
-            out.append(float(b0 + b1 * k + b2 * k ** 2 + b3 * fuel
-                             + b4 * track_temp + b5 * k + new_compound_bonus))
-        return out
+    def predict_fresh(self, from_lap: int, steps: int) -> list[float]:
+        """Forecast after boxing at the end of ``from_lap``, excluding the stop cost."""
+        return [self.pace(k, from_lap + k) for k in range(1, steps + 1)]

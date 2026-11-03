@@ -1,67 +1,212 @@
-"""Synthetic race generator + replay plumbing (Module 1).
+"""Race data: synthetic generator, bundled real races, FastF1 loader, CSV cache.
 
-Real FastF1/OpenF1 wiring plugs in here later: any loader only needs to
-return (laps_total, own_laps, opp_laps) as LapRecord lists. The demo uses a
-clearly-labelled SYNTHETIC generator so the prototype runs offline.
+Every source produces LapRecords with the same conventions (see ``state.py``).
 """
 from __future__ import annotations
 
 import csv
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
-from .state import LapRecord, Replay
+from .state import PIT_IN_SHARE, LapRecord, Replay
 
 COMPOUND_PACE = {"SOFT": -0.6, "MEDIUM": 0.0, "HARD": 0.5}
 COMPOUND_DEG = {"SOFT": 0.12, "MEDIUM": 0.08, "HARD": 0.05}
+DEFAULT_PIT_LOSS = 22.0  # prior until this race has shown a stop
+BUNDLE = Path(__file__).resolve().parent / "assets" / "openf1_laps.csv.gz"
+
+
+def true_lap_time(base: float, compound: str, age: int, lap: int, laps_total: int) -> float:
+    """Noise-free generator physics. Models never see this function."""
+    fuel = 1.2 * (laps_total - lap) / laps_total
+    return base + COMPOUND_PACE[compound] + COMPOUND_DEG[compound] * age + 0.004 * age ** 2 + fuel
+
+
+def true_wear(compound: str, age: int) -> float:
+    return COMPOUND_DEG[compound] * age + 0.004 * age ** 2
 
 
 def generate_race(seed: int = 7, laps_total: int = 40, pit_loss: float = 21.0,
                   opp_pit_laps: tuple = (14, 28), own_pit_laps: tuple = (15, 29),
-                  base_own: float = 93.0, base_opp: float = 92.9) -> Replay:
-    """Build a deterministic 2-stop synthetic race.
+                  base_own: float = 93.0, base_opp: float = 92.9,
+                  start_gap: float = 1.5,
+                  compounds: tuple = ("MEDIUM", "HARD", "SOFT")) -> Replay:
+    """Build a deterministic SYNTHETIC race.
 
-    A lap listed in pit_laps is driven on the OLD tyre and its time includes
-    pit_loss (pit at END of that lap); the next lap starts a fresh stint.
-    Exactly laps_total laps per car are produced.
+    A lap in pit_laps is the in-lap: it is driven on the old tyre and carries the
+    in-lap share of the stop; the next lap is the out-lap and carries the rest,
+    as real timing data does. The gap is the running sum of the lap times.
+
+    The own car also gets a SYNTHETIC private wear signal: the true wear plus
+    small noise. It stands in for team telemetry and is never measured data.
     """
     rng = np.random.default_rng(seed)
-    comps = ["MEDIUM", "HARD", "SOFT"]
     own_recs, opp_recs = [], []
-    gap = 1.5  # we start 1.5 s behind
     for car, pits, base, recs in (("OWN", own_pit_laps, base_own, own_recs),
                                   ("OPP", opp_pit_laps, base_opp, opp_recs)):
-        age, comp_idx = 0, 0
+        age, comp_idx, out_lap = 0, 0, False
         for lap_no in range(1, laps_total + 1):
             age += 1
-            comp = comps[min(comp_idx, 2)]
-            fuel = 1.2 * (laps_total - lap_no) / laps_total
-            deg = COMPOUND_DEG[comp] * age + 0.004 * age ** 2
-            lt = base + COMPOUND_PACE[comp] + deg + fuel + rng.normal(0, 0.25)
+            comp = compounds[min(comp_idx, len(compounds) - 1)]
+            lt = true_lap_time(base, comp, age, lap_no, laps_total) + rng.normal(0, 0.25)
             is_pit = lap_no in pits
             if is_pit:
-                lt += pit_loss
-            gap += float(rng.normal(0.05, 0.3))
+                lt += PIT_IN_SHARE * pit_loss
+            if out_lap:
+                lt += (1.0 - PIT_IN_SHARE) * pit_loss
+            wear = None
+            if car == "OWN":
+                wear = true_wear(comp, age) + float(rng.normal(0, 0.05))
             recs.append(LapRecord(
-                lap=lap_no, driver=car, compound=comp, tyre_age=age,
-                lap_time=lt, gap_to_rival=(gap if car == "OWN" else -gap),
-                track_temp=38.0 + 2 * np.sin(lap_no / 8), pitted=is_pit))
+                lap=lap_no, driver=car, compound=comp, tyre_age=age, lap_time=float(lt),
+                track_temp=38.0 + 2 * float(np.sin(lap_no / 8)), pitted=is_pit,
+                pit_out=out_lap, private_wear=wear))
+            out_lap = is_pit
             if is_pit:
                 age, comp_idx = 0, comp_idx + 1
+    gap = start_gap
     for o, p in zip(own_recs, opp_recs):
-        p.gap_to_rival = -o.gap_to_rival
+        gap += o.lap_time - p.lap_time
+        o.gap_to_rival, p.gap_to_rival = gap, -gap
     return Replay(laps_total, own_recs, opp_recs, pit_loss)
 
 
 # ---------------------------------------------------------------------------
-# Real-data loading (Module 1 extension, spec section 4).
-#
-# fastf1/pandas are imported lazily so the synthetic core stays light.
-# Live fetch needs network + F1 credentials (current FastF1); on any failure
-# the caller should fall back to generate_race(). Mapping + cache are pure
-# and unit-tested on fabricated frames (see test_pitwall.py).
+# Frames -> records. Pure mapping, shared by the bundled data and FastF1.
+
+
+def records_from_frames(own, opp, weather_time=None, weather_temp=None,
+                        default_temp=float("nan"), default_pit_loss=DEFAULT_PIT_LOSS,
+                        laps_total=None):
+    """Normalized frames -> (laps_total, own_recs, opp_recs, pit_loss prior).
+
+    Times stay raw: in-laps, out-laps and missing laps are flagged, never edited,
+    and no statistic from later laps is used. ``laps_total`` should be the official
+    race distance; without it, the longer of the two drivers' races is used.
+    """
+    laps = sorted(set(own["lap"]) & set(opp["lap"]))
+    if not laps:
+        raise ValueError("no overlapping laps for the two drivers")
+    own_by = {int(r["lap"]): r for _, r in own.iterrows()}
+    opp_by = {int(r["lap"]): r for _, r in opp.iterrows()}
+
+    def temp_at(start):
+        if weather_time is None or weather_temp is None or not len(weather_time):
+            return default_temp
+        wt = np.asarray(weather_time, float)
+        temps = np.asarray(weather_temp, float)
+        i = int(np.searchsorted(wt, float(start), side="right")) - 1
+        for j in range(min(i, len(temps) - 1), -1, -1):  # latest valid reading so far
+            if np.isfinite(temps[j]):
+                return float(temps[j])
+        return default_temp
+
+    def age_of(r, hist):
+        a = float(r["age"])
+        if np.isfinite(a):
+            return max(int(round(a)), 1)
+        if not hist or hist[-1].pitted:
+            return 1
+        return hist[-1].tyre_age + 1
+
+    def line_time(by, lap):
+        """When this car crossed the line at the end of ``lap``."""
+        r, nxt = by[lap], by.get(lap + 1)
+        if nxt is not None and np.isfinite(float(nxt["start"])):
+            return float(nxt["start"])
+        return float(r["start"]) + float(r["time"])
+
+    def neutral(r):
+        return any(c in str(r["status"]) for c in "4567")
+
+    own_recs, opp_recs = [], []
+    prev_gap, prev_pos = 0.0, {"OWN": 0, "OPP": 0}
+
+    def pos_of(r, role):
+        p = float(r["pos"])
+        if np.isfinite(p):
+            prev_pos[role] = int(p)
+        return prev_pos[role]
+
+    for l in laps:
+        ro, rp = own_by[l], opp_by[l]
+        gap = line_time(own_by, l) - line_time(opp_by, l)
+        gap = gap if np.isfinite(gap) else prev_gap
+        prev_gap = gap
+        so = float(ro["start"])
+        temp = temp_at(so) if np.isfinite(so) else default_temp
+        own_recs.append(LapRecord(
+            lap=l, driver="OWN", compound=str(ro["compound"]),
+            tyre_age=age_of(ro, own_recs), lap_time=float(ro["time"]),
+            position=pos_of(ro, "OWN"), gap_to_rival=gap, track_temp=temp,
+            safety_car=neutral(ro), pitted=bool(ro["pit_in"]), pit_out=bool(ro["pit_out"])))
+        opp_recs.append(LapRecord(
+            lap=l, driver="OPP", compound=str(rp["compound"]),
+            tyre_age=age_of(rp, opp_recs), lap_time=float(rp["time"]),
+            position=pos_of(rp, "OPP"), gap_to_rival=-gap, track_temp=temp,
+            safety_car=neutral(rp), pitted=bool(rp["pit_in"]), pit_out=bool(rp["pit_out"])))
+    if laps_total is None:
+        laps_total = int(max(max(own["lap"]), max(opp["lap"])))
+    return int(laps_total), own_recs, opp_recs, float(default_pit_loss)
+
+
+# ---------------------------------------------------------------------------
+# Bundled real races (OpenF1, see openf1.py). Offline and needs no login.
+
+
+@lru_cache(maxsize=1)
+def bundled_laps():
+    import pandas as pd
+
+    df = pd.read_csv(BUNDLE)
+    df["status"] = df["neutral"].map({True: "4", False: "1"})
+    df["acronym"] = df["acronym"].astype(str)
+    return df
+
+
+def has_bundled_data() -> bool:
+    return BUNDLE.exists()
+
+
+def list_bundled_races() -> list[tuple[int, str]]:
+    df = bundled_laps()
+    order = df.groupby(["year", "circuit"], sort=False)["start"].min().sort_values()
+    return [(int(y), str(c)) for y, c in order.index]
+
+
+def bundled_race(year: int, circuit: str):
+    df = bundled_laps()
+    return df[(df["year"] == year) & (df["circuit"] == circuit)]
+
+
+def bundled_drivers(year: int, circuit: str) -> list[str]:
+    race = bundled_race(year, circuit)
+    return race[race["lap"] == 1].sort_values("pos")["acronym"].tolist() \
+        or sorted(race["acronym"].unique())
+
+
+def driver_frame(race, acronym: str):
+    frame = race[race["acronym"] == acronym].sort_values("lap").reset_index(drop=True)
+    if frame.empty:
+        raise ValueError(f"no laps for driver {acronym}")
+    return frame
+
+
+def load_bundled_replay(year: int, circuit: str, own: str, opp: str) -> Replay:
+    race = bundled_race(year, circuit)
+    if race.empty:
+        raise ValueError(f"race not bundled: {year} {circuit}")
+    laps_total, own_r, opp_r, prior = records_from_frames(
+        driver_frame(race, own), driver_frame(race, opp),
+        laps_total=int(race["total_laps"].iloc[0]))
+    return Replay(laps_total, own_r, opp_r, prior)
+
+
+# ---------------------------------------------------------------------------
+# FastF1 (optional: current FastF1 needs an F1 account via F1_USERNAME/F1_PASSWORD).
 
 
 def default_cache_dir() -> Path:
@@ -88,82 +233,9 @@ def normalize_fastf1_frame(df):
         "pit_out": df["PitOutTime"].notna(),
         "start": pd.to_timedelta(df["LapStartTime"]).dt.total_seconds(),
     })
-    return out.sort_values("lap").reset_index(drop=True)
-
-
-def records_from_frames(own, opp, weather_time=None, weather_temp=None,
-                        default_temp=35.0, default_pit_loss=21.0):
-    """Normalized frames -> (laps_total, own_recs, opp_recs, pit_loss).
-
-    Pure mapping, no network. Out-lap times are replaced by the driver's
-    clean-lap median (documented approximation); only status "1" laps count
-    as clean pace; gaps come from lap-start deltas.
-    """
-    laps = sorted(set(own["lap"]) & set(opp["lap"]))
-    if not laps:
-        raise ValueError("no overlapping laps for the two drivers")
-    own_by = {int(r["lap"]): r for _, r in own.iterrows()}
-    opp_by = {int(r["lap"]): r for _, r in opp.iterrows()}
-
-    def clean_median(n):
-        ts = [float(r["time"]) for _, r in n.iterrows()
-              if not r["pit_in"] and not r["pit_out"]
-              and str(r["status"]) == "1" and np.isfinite(float(r["time"]))]
-        return float(np.median(ts)) if ts else 95.0
-
-    med = {"OWN": clean_median(own), "OPP": clean_median(opp)}
-
-    def temp_at(start):
-        if weather_time is None or weather_temp is None or not len(weather_time):
-            return default_temp
-        wt = np.asarray(weather_time, float)
-        i = int(np.searchsorted(wt, float(start)))
-        return float(np.asarray(weather_temp, float)[min(i, len(wt) - 1)])
-
-    own_recs, opp_recs, diffs = [], [], []
-    prev_gap, prev_pos = 0.0, {"OWN": 0, "OPP": 0}
-    for l in laps:
-        ro, rp = own_by[l], opp_by[l]
-
-        def age_of(r, hist):
-            a = float(r["age"])
-            if np.isfinite(a):
-                return max(int(round(a)), 1)
-            return hist[-1].tyre_age + 1 if hist else 1
-
-        def time_of(r, role):
-            t = float(r["time"])
-            if r["pit_out"] or not np.isfinite(t):
-                return med[role]
-            return t
-
-        def pos_of(r, role):
-            p = float(r["pos"])
-            if np.isfinite(p):
-                prev_pos[role] = int(p)
-            return prev_pos[role]
-
-        so, sp = float(ro["start"]), float(rp["start"])
-        gap = float(so - sp) if np.isfinite(so) and np.isfinite(sp) else prev_gap
-        prev_gap = gap
-        temp = temp_at(so) if np.isfinite(so) else default_temp
-        own_recs.append(LapRecord(
-            lap=l, driver="OWN", compound=str(ro["compound"]),
-            tyre_age=age_of(ro, own_recs), lap_time=time_of(ro, "OWN"),
-            position=pos_of(ro, "OWN"), gap_to_rival=gap, track_temp=temp,
-            safety_car=str(ro["status"]) != "1", pitted=bool(ro["pit_in"])))
-        opp_recs.append(LapRecord(
-            lap=l, driver="OPP", compound=str(rp["compound"]),
-            tyre_age=age_of(rp, opp_recs), lap_time=time_of(rp, "OPP"),
-            position=pos_of(rp, "OPP"), gap_to_rival=-gap, track_temp=temp,
-            safety_car=str(rp["status"]) != "1", pitted=bool(rp["pit_in"])))
-        for r, role in ((ro, "OWN"), (rp, "OPP")):
-            if bool(r["pit_in"]) and np.isfinite(float(r["time"])):
-                diffs.append(float(r["time"]) - med[role])
-    pit_loss = float(np.median(diffs)) if diffs else default_pit_loss
-    pit_loss = min(35.0, max(15.0, pit_loss))
-    laps_total = int(max(max(own["lap"]), max(opp["lap"])))
-    return laps_total, own_recs, opp_recs, pit_loss
+    out = out.sort_values("lap").reset_index(drop=True)
+    out.loc[out["lap"] == out["lap"].min(), "pit_out"] = False  # leaving the grid
+    return out
 
 
 def _cache_key(year, gp, own_drv, opp_drv) -> str:
@@ -179,12 +251,12 @@ def save_replay_csv(replay: Replay, pit_loss: float, meta: dict, csv_path) -> No
         w = csv.writer(f)
         w.writerow(["lap", "driver", "compound", "tyre_age", "lap_time",
                     "position", "gap_to_rival", "track_temp", "safety_car",
-                    "pitted"])
+                    "pitted", "pit_out"])
         for r in recs:
             w.writerow([r.lap, r.driver, r.compound, r.tyre_age,
                         f"{r.lap_time:.3f}", r.position,
                         f"{r.gap_to_rival:.3f}", f"{r.track_temp:.2f}",
-                        int(r.safety_car), int(r.pitted)])
+                        int(r.safety_car), int(r.pitted), int(r.pit_out)])
     Path(str(csv_path)).with_suffix(".json").write_text(
         json.dumps({**meta, "laps_total": replay.laps_total,
                     "pit_loss": pit_loss}))
@@ -202,7 +274,8 @@ def load_replay_csv(csv_path) -> Replay:
                 gap_to_rival=float(row["gap_to_rival"]),
                 track_temp=float(row["track_temp"]),
                 safety_car=bool(int(row["safety_car"])),
-                pitted=bool(int(row["pitted"])))
+                pitted=bool(int(row["pitted"])),
+                pit_out=bool(int(row.get("pit_out", 0) or 0)))
             (own if r.driver == "OWN" else opp).append(r)
     return Replay(int(meta["laps_total"]), own, opp, float(meta["pit_loss"]))
 
@@ -211,9 +284,10 @@ def load_fastf1_replay(year, gp, own_drv, opp_drv, cache_dir=None,
                        offline_ok=True) -> Replay:
     """Fetch a real race via FastF1 (needs network + F1 credentials).
 
-    Falls back to the CSV cache when offline_ok and an entry exists,
-    else re-raises. Callers should fall back to generate_race().
+    Falls back to the CSV cache when offline_ok and an entry exists, else re-raises.
     """
+    if own_drv == opp_drv:
+        raise ValueError("pick two different drivers")
     cache_dir = Path(cache_dir) if cache_dir else default_cache_dir()
     (cache_dir / "fastf1").mkdir(parents=True, exist_ok=True)
     csv_path = cache_dir / (_cache_key(year, gp, own_drv, opp_drv) + ".csv")
@@ -237,10 +311,11 @@ def load_fastf1_replay(year, gp, own_drv, opp_drv, cache_dir=None,
             wtemp = pd.to_numeric(w["TrackTemp"], errors="coerce").to_numpy()
         except Exception:
             pass
-        laps_total, own_r, opp_r, ploss = records_from_frames(
-            own_n, opp_n, wt, wtemp)
-        replay = Replay(laps_total, own_r, opp_r, ploss)
-        save_replay_csv(replay, ploss,
+        official = getattr(s, "total_laps", None)
+        laps_total, own_r, opp_r, prior = records_from_frames(
+            own_n, opp_n, wt, wtemp, laps_total=int(official) if official else None)
+        replay = Replay(laps_total, own_r, opp_r, prior)
+        save_replay_csv(replay, prior,
                         {"year": year, "gp": gp, "own": own_drv, "opp": opp_drv},
                         csv_path)
         return replay
