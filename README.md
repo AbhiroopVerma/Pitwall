@@ -43,6 +43,7 @@ cars in a replay do what really happened, and options that were not taken are si
 - [Reproduce the research](#reproduce-the-research)
 - [Code map](#code-map)
 - [Assumptions and limits](#assumptions-and-limits)
+- [Licence](#licence)
 
 ## Meta Global AI Developer Hackathon
 
@@ -54,8 +55,8 @@ seconds, when the rival's plan is hidden and each option can only be judged by s
 | Uses Meta's models | Done | Muse Spark (`muse-spark-1.3`) through the Meta Model API, in [`pitwall/copilot.py`](pitwall/copilot.py) |
 | Public repository | Done | [AbhiroopVerma/Pitwall](https://github.com/AbhiroopVerma/Pitwall) |
 | New work, built during the event | Done | Git history below, all dated 1 to 4 Nov 2026 |
-| Three-minute demo video | Not linked yet | |
-| Rights to data and code | To confirm | Data comes from [OpenF1](https://openf1.org), which is unofficial. Its terms need checking |
+| Three-minute demo video | Not linked yet | Script in [`docs/demo_script.md`](docs/demo_script.md) |
+| Rights to data and code | Non-commercial use only | Code is MIT. Race data is from [OpenF1](https://openf1.org) under CC BY-NC-SA 4.0, which covers research and non-commercial use. See [Licence](#licence) |
 
 ### How Muse Spark is used
 
@@ -292,9 +293,11 @@ the comparison is paired. Policies saw only past laps. Confidence intervals come
 resamples of the paired differences.
 
 **4. Explanation.** Facts were taken from nine decisions in three 2026 races: Australia, Spain and
-Italy, with one pair each, at three points in each race. Each decision got six questions through the
-real API: four with a known numeric answer (gap, stop cost, win chance, rival stop chance), one asking
-why, and one that the facts can't answer (fuel left, or what the driver said on the radio).
+Italy, with one pair each, at three points in each race. Each decision got seven questions through the
+real API: four with a known numeric answer (gap, stop cost, win chance, rival stop chance), one
+two-part question that must include the stop cost, one asking why, and one that the facts can't answer
+(fuel left, or what the driver said on the radio). The two-part question was added after the model
+refused one outright, and the instructions were changed to fix that before this run.
 
 ## Results
 
@@ -375,20 +378,21 @@ Win-chance Brier by laps remaining:
 
 | Measure | Result |
 |---|---:|
-| Known-value questions answered correctly | 36 of 36 |
+| Known-value questions answered correctly | 45 of 45 |
 | Unanswerable questions refused with `NOT IN DATA` | 9 of 9 |
 | Explanations returned | 9 of 9 |
-| First attempts quoting a number not in the facts | 0 of 54 |
+| First attempts quoting a number not in the facts | 0 of 63 |
 | Answers withheld, API errors | 0, 0 |
-| Response time, median (worst) | 2.2 s (6.7 s) |
-| Tokens for the whole run | 74,952 |
+| Response time, median (worst) | 2.4 s (6.1 s) |
+| Tokens for the whole run | 90,522 |
 
 **What this shows:**
 - **Answers stayed on the facts,** once PITWALL supplied the sums. The number check never had to step
   in during this run, so its retry and withholding are covered only by tests with fake replies.
 - **Explanations mostly restate PITWALL's numbers.** They are accurate and short, but they compare win
   chance and time rather than add strategic reasoning.
-- **The sample is small:** 54 questions on three races, with no error bars.
+- **The sample is small:** 63 questions on three races, with no error bars. These races also showed the
+  instruction fix working, so they aren't an untouched test of it.
 - **A correct answer means the right number appears in the reply.** The check doesn't read the sentence
   around that number.
 
@@ -428,6 +432,8 @@ median was 5 ms and the 99th percentile 24 ms, but the slowest decisions took 2.
   races and on a local fake server with outages and logins. The first live session should be a rehearsal.
 - **Polling adds delay:** up to 8 s, plus OpenF1's own.
 - **A real team has better data.** Telemetry, remaining tyre sets and radio are not used.
+- **Commercial team use needs a different feed.** OpenF1's licence is non-commercial, and OpenF1 says it
+  isn't meant to replace official data feeds.
 
 ## Reproduce the research
 
@@ -487,6 +493,15 @@ last call stays up marked `STALE`. If the rival retires, the target moves to the
   Their replays of 2023-24 races are in-sample for the hazard model, so use a 2025 race for a fair view.
 - **FastF1:** that option in the dashboard needs an F1 account (`F1_USERNAME`, `F1_PASSWORD`). If it
   fails, the dashboard says so and labels the synthetic race it falls back to.
-- **Data:** OpenF1 is unofficial. Check its terms before any use beyond this project.
 - **Muse Spark data:** each question sends the current race state to Meta's API. The default model runs in
   standard mode, not the cheaper contributor mode, where content may be used for training.
+
+## Licence
+
+- **Code:** [MIT](LICENSE).
+- **Race data and files derived from it:** [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/),
+  from [OpenF1](https://openf1.org). They may not be used commercially. [`DATA_LICENSE.md`](DATA_LICENSE.md)
+  lists the files.
+
+OpenF1 is unofficial, and neither it nor PITWALL is associated with Formula 1, the FIA or Formula One
+Management. F1, FORMULA ONE, FORMULA 1 and GRAND PRIX are trademarks of Formula One Licensing B.V.

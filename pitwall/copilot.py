@@ -53,7 +53,10 @@ Rules:
 - Quote numbers exactly as given. Never do arithmetic or estimate. The what_if section has
   the sums already done, so use it.
 - A positive time_vs_call_s means that option finishes that much better than the call.
-- If the facts do not answer the question, reply with exactly: {NOT_IN_DATA}
+- Answer every part of the question that the facts cover. The reason field and the options
+  explain why a call was made, so use them for why questions.
+- If the facts cover only part of the question, answer that part and add {NOT_IN_DATA} for the rest.
+- If the facts cover none of it, reply with exactly: {NOT_IN_DATA}
 - If known_limits covers the question, say so.
 - Answer in at most two short sentences that can be read aloud. No preamble, no markdown."""
 
@@ -372,6 +375,9 @@ ASK_EXACT = {
             lambda f: next(o["win_pct"] for o in f["options"] if o["is_the_call"])),
     "rival_stop": ("What is the chance the rival stops within 3 laps, as a percentage?",
                    lambda f: f["rival_stop_forecast"]["within_3_laps_pct"]),
+    # Two parts at once. The model used to refuse this whole question.
+    "why_and_cost": ("Why this call right now, and what does a stop cost?",
+                     lambda f: f["stop_cost_now_s"]),
 }
 ASK_WHY = "Why is this the call, and why not the next best option?"
 ASK_UNKNOWN = ("How many kilograms of fuel do we have left?",
