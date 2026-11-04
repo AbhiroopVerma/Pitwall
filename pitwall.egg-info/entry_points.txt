@@ -1,0 +1,2 @@
+[console_scripts]
+pitwall-live = pitwall.live:main
