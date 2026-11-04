@@ -4,7 +4,8 @@
 
 PITWALL follows one Formula 1 car against one rival. On every lap it predicts when the rival
 will stop, simulates each of our options to the flag, and gives the race engineer one stable
-call and the words to say to the driver.
+call and the words to say to the driver. The engineer can then ask Meta's Muse Spark about that
+call and get a short answer built only from PITWALL's numbers, with every number checked.
 
 ```
 LAP 49/71   GREEN   LEC P4  vs  VER P1  line in  27s
@@ -23,8 +24,13 @@ RADIO  "Plan is box end of lap 52. Stay in the window till then."
   stay to flag          16%    -0.7s      0
 
 VER STOP  this lap  2%   within 3  5%   within 5 10%   likely lap 53
+
+MUSE SPARK explains only, the call above is PITWALL's
+Q (lap 49, 1 lap ago): Why not box now, and where would we rejoin?
+Boxing now leaves us 26.6 s behind VER. Plan is box end of lap 52 to rejoin P18 in clear air.
 ```
-*Real output from a replay of the 2026 Mexico race, trimmed. It is decision support only: the
+*Real output from a replay of the 2026 Mexico race, trimmed and rearranged, with the answer shown
+below the call data rather than directly under the call. It is decision support only: the
 cars in a replay do what really happened, and options that were not taken are simulated.*
 
 ## Contents
@@ -45,11 +51,24 @@ seconds, when the rival's plan is hidden and each option can only be judged by s
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Uses Meta's models | **Not yet** | No code in this repo calls a Meta model. Every result below comes from the statistical models described here |
+| Uses Meta's models | Done | Muse Spark (`muse-spark-1.3`) through the Meta Model API, in [`pitwall/copilot.py`](pitwall/copilot.py) |
 | Public repository | Done | [AbhiroopVerma/Pitwall](https://github.com/AbhiroopVerma/Pitwall) |
 | New work, built during the event | Done | Git history below, all dated 1 to 4 Nov 2026 |
 | Three-minute demo video | Not linked yet | |
 | Rights to data and code | To confirm | Data comes from [OpenF1](https://openf1.org), which is unofficial. Its terms need checking |
+
+### How Muse Spark is used
+
+The engine makes the call and Muse Spark explains it, so a strategist can question a number in
+plain words without looking away to read a table. Facts flow one way, so no answer can change a call:
+
+| Safeguard | How it works |
+|---|---|
+| Facts only | The model sees the current race state as JSON and must reply `NOT IN DATA` to anything else |
+| Sums supplied | "If we box now" and "if the rival boxes now" are worked out by PITWALL, because the model got one wrong in testing: 19.8 s behind instead of 26.0 s |
+| Numbers checked | An answer quoting a number not in the facts gets one retry, then is withheld and labelled on screen |
+| Never in the way | Requests run on a background thread. A slow reply, an API failure or a missing key leaves the calls unaffected |
+| Clearly labelled | Answers sit under a heading that says the call is PITWALL's, and show how many laps old they are |
 
 ### What was built during the hackathon
 
@@ -60,9 +79,10 @@ seconds, when the rival's plan is hidden and each option can only be judged by s
 | `7a0e376` | 3 Nov | Training on real races, season-based testing, leakage fixes, fairer simulator |
 | `c695087` | 3 Nov | Live terminal, learned circuit values, real-race scoring, algorithm paper |
 | `d8d1a91` | 4 Nov | Packaging metadata |
+| Latest | 4 Nov | Muse Spark integration, its safeguards and its evaluation |
 
-Built with numpy, pandas, Streamlit, Plotly and FastF1, using data from OpenF1. Code was written
-with AI assistance from Claude Code. The maths is written up in
+Built with Muse Spark, numpy, pandas, Streamlit, Plotly and FastF1, using data from OpenF1. Code was
+written with AI assistance from Claude Code. The maths is written up in
 [`docs/pitwall_algorithm.pdf`](docs/pitwall_algorithm.pdf).
 
 ## Run it
@@ -79,11 +99,24 @@ python -m pitwall.live --fabricated safety-car          # or: undercut, rival-ou
 python -m pitwall.live --race 2025 Monza --own LEC --opp NOR --start-lap 25
 python -m pitwall.live --list                           # every bundled race
 
-pytest test_pitwall.py test_live.py                     # 113 tests
+pytest test_pitwall.py test_live.py test_copilot.py     # 138 tests, no API key needed
 ```
 
 `--speed` sets race seconds per real second. The default is 20, and `--speed 1` is true real
-time. While it runs: `space` pause, `+`/`-` speed, `n` next lap, `t` change rival, `q` quit.
+time. While it runs: `a` ask Muse Spark, `space` pause, `+`/`-` speed, `n` next lap, `t` change
+rival, `q` quit.
+
+To turn on Muse Spark, create a key in the Meta Model API dashboard and either export it or put it
+in a `.env` file, which git ignores. Everything else works without one.
+
+```bash
+export MODEL_API_KEY="your-key"
+python -m pitwall.live --fabricated safety-car --brief   # explains each new call, uses API credit
+python -m pitwall.live --plain --start-lap 49 --until-lap 50 --ask "Why not box now?"
+```
+
+In a replay, pressing `a` pauses the race until the answer arrives. In a live session the race
+carries on, and the answer says how many laps old it is.
 
 | Source | Data | Needs |
 |---|---|---|
@@ -102,9 +135,11 @@ Also available: `--plain --log race.jsonl` prints each decision and keeps a log,
 1. **Prediction:** from public timing alone, how well can we predict a rival's stop?
 2. **Forecasting:** is the win chance on screen trustworthy, and does it beat simple rules?
 3. **Decision:** does planning to the flag beat rule-based strategies?
+4. **Explanation:** can a language model answer questions about a call accurately enough to use on
+   a pit wall, and refuse what it can't know?
 
 Real races can answer the first two. The third needs simulation, because each race shows only the
-choice the team really made.
+choice the team really made. The fourth is tested on facts from real races.
 
 ### Design
 
@@ -112,7 +147,7 @@ choice the team really made.
 |---|---|
 | Data | Lap, stint and race-control records from OpenF1 for 89 races |
 | Split | By season: fit on 2023-24, test on 2025 and 2026 |
-| Models | Interpretable statistical models and Monte Carlo simulation, no black-box model |
+| Models | Interpretable statistical models and Monte Carlo simulation make every forecast and call. Muse Spark only explains them |
 | Baselines | Every result is compared with a simple alternative |
 | Replay | Test races run through the production engine, one event at a time |
 | Reporting | Weak results are published next to strong ones |
@@ -208,6 +243,11 @@ cannot change which option ranks first.
 **Whole field (`live_field.py`).** Rejoin position is projected across every running car, including
 lapped traffic, assuming that they hold recent pace and do not stop.
 
+**Explanation (`copilot.py`).** Muse Spark 1.3 runs at `minimal` reasoning, because `low` and `medium`
+used up a 600-token limit on reasoning and returned no answer. Each question goes out with the current facts.
+Every number in the reply is compared with the facts, allowing only for rounding, so 23 s may quote
+22.9 s but 22.5 s may not.
+
 ### What is measured, fitted or assumed
 
 | Value | Number | Source |
@@ -250,6 +290,11 @@ never happened.
 **3. Strategy.** Five policies drove the same 300 randomised synthetic races with the same noise, so
 the comparison is paired. Policies saw only past laps. Confidence intervals come from 2,000 bootstrap
 resamples of the paired differences.
+
+**4. Explanation.** Facts were taken from nine decisions in three 2026 races: Australia, Spain and
+Italy, with one pair each, at three points in each race. Each decision got six questions through the
+real API: four with a known numeric answer (gap, stop cost, win chance, rival stop chance), one asking
+why, and one that the facts can't answer (fuel left, or what the driver said on the radio).
 
 ## Results
 
@@ -326,6 +371,27 @@ Win-chance Brier by laps remaining:
   synthetic private wear signal. They show good decisions inside this model's world, not proof that it
   would win real races.
 
+### 4. Muse Spark explanations, on 2026 races
+
+| Measure | Result |
+|---|---:|
+| Known-value questions answered correctly | 36 of 36 |
+| Unanswerable questions refused with `NOT IN DATA` | 9 of 9 |
+| Explanations returned | 9 of 9 |
+| First attempts quoting a number not in the facts | 0 of 54 |
+| Answers withheld, API errors | 0, 0 |
+| Response time, median (worst) | 2.2 s (6.7 s) |
+| Tokens for the whole run | 74,952 |
+
+**What this shows:**
+- **Answers stayed on the facts,** once PITWALL supplied the sums. The number check never had to step
+  in during this run, so its retry and withholding are covered only by tests with fake replies.
+- **Explanations mostly restate PITWALL's numbers.** They are accurate and short, but they compare win
+  chance and time rather than add strategic reasoning.
+- **The sample is small:** 54 questions on three races, with no error bars.
+- **A correct answer means the right number appears in the reply.** The check doesn't read the sentence
+  around that number.
+
 ### Speed
 
 At 1,000 simulations per option, calculation took about 5 ms per decision, with a worst case of 58 ms
@@ -347,6 +413,8 @@ median was 5 ms and the 99th percentile 24 ms, but the slowest decisions took 2.
 - **False alarms are measured only for the hazard model** on 2025, not in the live terminal.
 - **Hazard scores cover 2025 only.** 2026 enters only through the live terminal scores.
 - **Scoring used 300 simulations per option,** and the live default is 1,000.
+- **The number check can't judge reasoning.** A wrong statement built from correct numbers would pass,
+  for example a sign error or the wrong driver. Muse Spark's answers aren't for reading out unchecked.
 
 **In the models:**
 - **The opponent does not react** to our stop, and the hazard model ignores the gap to us.
@@ -369,10 +437,11 @@ python -m pitwall.priors             # relearn circuit values from 2023-24
 python -m pitwall.train_hazard       # refit and rescore the hazard model
 python -m pitwall.live_eval          # refit the win blend, rescore the live terminal
 python -m pitwall.evaluate --races 300   # rerun the strategy comparison
+python -m pitwall.copilot --eval     # rescore Muse Spark, needs MODEL_API_KEY and uses API credit
 ```
 
 Stored results are in `pitwall/assets/`: `hazard_weights.json`, `live_eval.json`,
-`strategy_eval.json` and `race_priors.json`.
+`strategy_eval.json`, `copilot_eval.json` and `race_priors.json`.
 
 `python -m pitwall.live_eval --calibrate` retunes the wear prior strength and the pace settings by
 coordinate search, on every second training race with three pairs, scoring every fourth lap. The
@@ -384,10 +453,13 @@ that command alone will not reproduce it.
 ```
 OpenF1 or bundled laps → event feed → whole-field state → tyre models → rival hazard
     → Monte Carlo to the flag → utility ranking → stable call → text screen
+                                                        ↓ facts, one way
+                                 Muse Spark → number check → labelled answer on screen
 ```
 
 | File | Role |
 |---|---|
+| `copilot.py` | Muse Spark client, facts, number check, background worker, evaluation |
 | `live.py`, `live_view.py` | Command line, clock, keyboard, text screen |
 | `live_engine.py` | Runs the pipeline on each event, keeps the call stable, raises alerts |
 | `live_feed.py` | Replay, rehearsal and live OpenF1 feeds |
@@ -416,3 +488,5 @@ last call stays up marked `STALE`. If the rival retires, the target moves to the
 - **FastF1:** that option in the dashboard needs an F1 account (`F1_USERNAME`, `F1_PASSWORD`). If it
   fails, the dashboard says so and labels the synthetic race it falls back to.
 - **Data:** OpenF1 is unofficial. Check its terms before any use beyond this project.
+- **Muse Spark data:** each question sends the current race state to Meta's API. The default model runs in
+  standard mode, not the cheaper contributor mode, where content may be used for training.
