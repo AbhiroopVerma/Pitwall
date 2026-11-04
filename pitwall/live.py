@@ -9,8 +9,10 @@ Sources:
     python -m pitwall.live --openf1 latest --own LEC --opp NOR  a race happening now
 
 Live sessions need a paid OpenF1 account: set OPENF1_USERNAME and OPENF1_PASSWORD.
+Muse Spark answers need MODEL_API_KEY. Without it, everything else works the same.
 
-Keys while running: space pause, + faster, - slower, n next lap, t change target, q quit.
+Keys while running: a ask Muse Spark, space pause, + faster, - slower, n next lap,
+t change target, q quit.
 """
 from __future__ import annotations
 
@@ -23,17 +25,18 @@ import signal
 import sys
 import time
 
+from .copilot import BRIEF_QUESTION, MODEL, Answer, Copilot, MuseClient, load_api_key, panel_text
 from .data import list_bundled_races
 from .demo import N_SIMS
 from .live_engine import Frame, LiveEngine
 from .live_feed import (OpenF1Client, OpenF1LiveFeed, OpenF1Normalizer, RehearsalClient,
                         bundled_feed, open_session)
-from .live_view import render, terminal_size
+from .live_view import render, terminal_size, wrap
 from .priors import load_priors
 from .synthetic import SCENARIOS, synthetic_feed
 
-KEYS = "space pause | + faster | - slower | n next lap | t target | q quit"
-LIVE_KEYS = "t target | q quit"
+KEYS = "a ask | space pause | + faster | - slower | n next lap | t target | q quit"
+LIVE_KEYS = "a ask | t target | q quit"
 DEFAULT_RACE = (2026, "Mexico City")
 DEFAULT_CARS = ("LEC", "VER")
 PLAIN_WIDTH = 100
@@ -136,9 +139,41 @@ class DecisionLog:
                         for o in f.options],
         }) + "\n")
 
+    def write_answer(self, answer: Answer) -> None:
+        if self.file:
+            self.file.write(json.dumps({"muse_spark": dataclasses.asdict(answer)}) + "\n")
+
     def close(self) -> None:
         if self.file:
             self.file.close()
+
+
+class Assistant:
+    """What the race loops need from Muse Spark. Does nothing without a copilot."""
+
+    def __init__(self, copilot: Copilot | None, brief: bool, log: DecisionLog):
+        self.copilot, self.brief, self.log = copilot, brief, log
+        self.answer: Answer | None = None
+        self._call = None
+
+    def on_frame(self, frame: Frame) -> Answer | None:
+        """Start a brief if the call changed. Returns an answer if one has just arrived."""
+        if self.copilot is None:
+            return None
+        call = (frame.call.kind, frame.call.box_lap)
+        if self.brief and frame.options and call != self._call:
+            self._call = call
+            self.copilot.ask(BRIEF_QUESTION, frame)
+        fresh = self.copilot.poll()
+        if fresh is not None:
+            self.answer = fresh
+            self.log.write_answer(fresh)
+        return fresh
+
+    def panel(self, frame: Frame) -> list[tuple[str, str]]:
+        if self.copilot is None:
+            return []
+        return panel_text(self.answer, self.copilot.pending, frame.lap)
 
 
 def _default_pair(drivers: list[str]) -> tuple[str, str]:
@@ -188,9 +223,17 @@ def _ts_of(row: dict) -> float:
     return pd.Timestamp(row["date_start"]).timestamp()
 
 
-def run_plain(engine: LiveEngine, feed, clock, a, log: DecisionLog) -> int:
+def _print_answer(answer: Answer, frame: Frame, a) -> None:
+    rows = panel_text(answer, False, frame.lap)
+    print("\n".join(line for _, text in rows for line in wrap(text, PLAIN_WIDTH)))
+    print(flush=True)
+
+
+def run_plain(engine: LiveEngine, feed, clock, a, log: DecisionLog, helper: Assistant) -> int:
     """Print each new decision as a block. For pipes, logs and slow links."""
     last = None
+    question = a.ask
+    frame = None
     while True:
         now = clock()
         engine.ingest(feed.poll(now))
@@ -201,8 +244,20 @@ def run_plain(engine: LiveEngine, feed, clock, a, log: DecisionLog) -> int:
             log.write(frame)
             print("\n".join(render(frame, PLAIN_WIDTH, a.plain_height, color=a.color, speed=a.speed)))
             print(flush=True)
+            if question and helper.copilot is not None and frame.options:
+                helper.copilot.ask(question, frame)
+                question = None
+        fresh = helper.on_frame(frame)
+        if fresh is not None:
+            _print_answer(fresh, frame, a)
         if frame.finished or (a.until_lap and frame.own_lap >= a.until_lap) or (
                 feed.exhausted and frame.own_lap and clock() > (feed.events[-1].t + 30)):
+            if helper.copilot is not None:  # the race is over, so an answer can hold nothing up
+                helper.copilot.wait(helper.copilot.client.timeout * 2)
+                fresh = helper.copilot.poll()
+                if fresh is not None:
+                    helper.log.write_answer(fresh)
+                    _print_answer(fresh, frame, a)
             return 0
         time.sleep(0.02 if a.speed >= 50 else 0.1)
 
@@ -212,7 +267,47 @@ def _handle_key(keys: str, engine: LiveEngine, feed, clock, state: dict) -> bool
     return all(_handle_char(ch, engine, feed, clock, state) for ch in keys)
 
 
+def _resume(clock, state: dict) -> None:
+    if state.get("resume"):
+        state["resume"] = False
+        if clock.paused:
+            clock.toggle()
+
+
+def _handle_question(ch: str, engine: LiveEngine, clock, state: dict) -> None:
+    if ch in "\r\n":
+        question = state["asking"].strip()
+        state["asking"] = None
+        if question:  # a replay stays paused until the answer arrives
+            state["helper"].copilot.ask(question, engine.frame)
+        else:
+            _resume(clock, state)
+    elif ch == "\x1b":
+        state["asking"] = None
+        _resume(clock, state)
+    elif ch in "\x7f\b":
+        state["asking"] = state["asking"][:-1]
+    elif ch.isprintable():
+        state["asking"] += ch
+
+
 def _handle_char(ch: str, engine: LiveEngine, feed, clock, state: dict) -> bool:
+    if state.get("asking") is not None:
+        _handle_question(ch, engine, clock, state)
+        return True
+    if state.get("typing") is None and ch in "aA":
+        helper = state.get("helper")
+        if helper is None or helper.copilot is None:
+            state["note"] = "Muse Spark is off: set MODEL_API_KEY"
+        elif not engine.frame.options:
+            state["note"] = "no call to ask about yet"
+        else:
+            state["note"] = ""
+            state["asking"] = ""
+            if not engine.info.live and not clock.paused:
+                clock.toggle()
+                state["resume"] = True
+        return True
     if state.get("typing") is not None:
         if ch in "\r\n":
             code = state["typing"].strip().upper()
@@ -249,9 +344,10 @@ def _handle_char(ch: str, engine: LiveEngine, feed, clock, state: dict) -> bool:
     return True
 
 
-def run_screen(engine: LiveEngine, feed, clock, a, log: DecisionLog) -> int:
+def run_screen(engine: LiveEngine, feed, clock, a, log: DecisionLog, helper: Assistant) -> int:
     keyboard = Keyboard()
-    state: dict = {"typing": None, "note": ""}
+    state: dict = {"typing": None, "note": "", "asking": None, "resume": False, "helper": helper}
+    question = a.ask
     last_id = 0
     last_draw = 0.0
     try:
@@ -265,6 +361,13 @@ def run_screen(engine: LiveEngine, feed, clock, a, log: DecisionLog) -> int:
                     last_id = frame.decision_id
                     log.write(frame)
                     last_draw = 0.0
+                if question and helper.copilot is not None and frame.options:
+                    helper.copilot.ask(question, frame)
+                    question = None
+                if helper.on_frame(frame) is not None:
+                    last_draw = 0.0
+                    if state["asking"] is None and helper.copilot is not None and not helper.copilot.pending:
+                        _resume(clock, state)
                 key = keyboard.read()
                 if key:
                     if not _handle_key(key, engine, feed, clock, state):
@@ -273,14 +376,17 @@ def run_screen(engine: LiveEngine, feed, clock, a, log: DecisionLog) -> int:
                 if time.monotonic() - last_draw >= 0.25:
                     w, h = terminal_size()
                     keys = LIVE_KEYS if engine.info.live else KEYS
-                    if state["typing"] is not None:
+                    if state["asking"] is not None:
+                        keys = f"ask Muse Spark, Enter to send, Esc to cancel: {state['asking']}_"
+                    elif state["typing"] is not None:
                         keys = f"new target code, Enter to confirm, Esc to cancel: {state['typing']}_"
                     elif state["note"]:
                         keys = f"{state['note']} | {keys}"
                     if clock.paused:
                         keys = f"PAUSED | {keys}"
                     screen.draw(render(frame, w, h - 1, a.color,
-                                       None if engine.info.live else clock.speed, keys))
+                                       None if engine.info.live else clock.speed, keys,
+                                       helper.panel(frame)))
                     last_draw = time.monotonic()
                 if frame.finished or (feed.exhausted and now > feed.events[-1].t + 30):
                     finished_at = finished_at or time.monotonic()
@@ -324,6 +430,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--log", help="append every decision to this JSONL file")
     ap.add_argument("--hold", type=float, default=30.0, help="seconds to keep the final screen open")
     ap.add_argument("--seed", type=int, default=11, help="seed for --fabricated")
+    ap.add_argument("--brief", action="store_true", help="Muse Spark explains each new call (uses API credit)")
+    ap.add_argument("--ask", metavar="QUESTION", help="ask Muse Spark this at the first decision")
+    ap.add_argument("--muse-model", default=MODEL, help="Meta Model API model id")
     ap.add_argument("--list", action="store_true", help="list bundled races and exit")
     ap.add_argument("--drivers", action="store_true", help="list the cars in the chosen race and exit")
     ap.add_argument("--base-url", default="https://api.openf1.org", help=argparse.SUPPRESS)
@@ -368,11 +477,16 @@ def main(argv: list[str] | None = None) -> int:
         if cue is not None:
             clock.jump(cue)
     log = DecisionLog(a.log)
+    key = load_api_key()
+    if not key and (a.brief or a.ask):
+        print("warning: MODEL_API_KEY is not set, so Muse Spark is off. Calls are unaffected.",
+              file=sys.stderr)
+    helper = Assistant(Copilot(MuseClient(key, a.muse_model)) if key else None, a.brief, log)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         if a.plain or not sys.stdout.isatty():
-            return run_plain(engine, feed, clock, a, log)
-        return run_screen(engine, feed, clock, a, log)
+            return run_plain(engine, feed, clock, a, log, helper)
+        return run_screen(engine, feed, clock, a, log, helper)
     except KeyboardInterrupt:
         return 0
     finally:

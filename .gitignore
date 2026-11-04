@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 pitwall/.venv/
 .data_cache/
+.env
+*.egg-info/
+Pasted 2026-11-02 at 8.30.59 PM.txt
+Screenshot 2026-07-12 at 20.50.13.pdf

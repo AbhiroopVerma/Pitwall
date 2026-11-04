@@ -44,7 +44,9 @@ opponent will pit, and simulates our options to the end of the race to recommend
 It chains five simple, explainable models rather than one large one. This document
 sets out the mathematics of each model, the assumptions behind it, and how the
 system was evaluated, including where it falls short. A live terminal runs the same models
-during a race and is scored against real results from unseen 2025 and 2026 races.
+during a race and is scored against real results from unseen 2025 and 2026 races. Meta's
+Muse Spark then answers an engineer's questions about each call, using only the system's numbers.
+It explains the call and cannot change it.
 \end{abstract}
 
 \section{System overview}
@@ -366,6 +368,34 @@ followed by ``box now'' is one call, so calls are tracked by the lap to box on.
         from their pace, then corrected when they cross the line.
 \end{itemize}
 
+\section{Explaining calls with Muse Spark}
+
+The statistical engine makes every forecast and call. Muse Spark 1.3, reached through the Meta
+Model API, answers the engineer's questions about them. Information flows one way, from a finished
+decision to the model, so no answer can alter a call.
+
+\subsection{Keeping answers on the facts}
+\begin{itemize}
+  \item \textbf{Facts only.} Each question is sent with the current race state as JSON. The
+        model must reply \texttt{NOT IN DATA} to anything the facts do not answer.
+  \item \textbf{Sums supplied.} The positions after a stop are computed by the engine. If we
+        stop now, with no stop from the rival, the gap becomes $g + L_{\text{now}}$. If the rival
+        stops and we do not, it becomes $g - L_{\text{now}}$. In testing, given $g = 3.1$\,s and
+        $L_{\text{now}} = 22.9$\,s, the model answered 19.8\,s behind instead of 26.0\,s.
+  \item \textbf{Numbers checked.} Let $F$ be the numbers in the facts and the question. A number
+        $n$ quoted to $d$ decimal places passes if
+        \begin{equation}
+        \min_{f \in F} |n - f| \le 0.5 \times 10^{-d},
+        \end{equation}
+        so rounding 22.9 to 23 passes, while 22.5 does not. An answer that fails gets one retry
+        and is then withheld.
+  \item \textbf{Never in the way.} Requests run on a background thread, so a slow reply or a
+        failure leaves the calls unaffected. Without a key, the terminal works the same.
+\end{itemize}
+
+The model runs at \texttt{minimal} reasoning: \texttt{low} and \texttt{medium} used up a 600-token
+limit on reasoning and returned no answer.
+
 \section{Evaluation}
 
 \subsection{Pit-stop prediction on unseen races}
@@ -392,7 +422,7 @@ Constant base rate & 0.0280 & 0.1308 \\
 \caption{Scores on 22 unseen races from 2025.}
 \end{table}
 
-At $\theta = 30\%$, the three-lap forecast warned before 34\% of 636 stops and fired on 6.8\%
+At $\theta = 30\%$, the three-lap forecast warned before 34\% of 636 stops and fired on 6.7\%
 of laps with no stop coming. Probabilities are reasonably calibrated up to about 30\% and
 run high above that: predictions of 40--50\% came true 25\% of the time. The advantage over
 the baselines is real but small.
@@ -450,7 +480,7 @@ Next-lap pace, mean error & 0.47\,s & 0.48\,s \\
 Pace 10 laps ahead on the same tyres, mean error & 0.69\,s & 0.67\,s \\
 Rejoin position within 2 places (mean error) & 76\% (1.6) & 75\% (1.8) \\
 Rival stops flagged in the 3 laps before & 35\% & 43\% \\
-Call changes per race & 4.7 & 5.0 \\
+Call changes per pair of cars & 4.7 & 5.0 \\
 \bottomrule
 \end{tabular}
 \caption{Live terminal scored against real results. Lower Brier is better.}
@@ -470,7 +500,8 @@ Came true, 2026 & 4\% & 29\% & 46\% & 67\% & 81\% & 95\% \\
 \end{table}
 
 A decision takes about 5\,ms at 1000 simulations per option (worst 58\,ms over 353 decisions),
-against a lap of about 80\,s. Four caveats apply:
+against a lap of about 80\,s. In the larger scoring run at 300 simulations, the slowest decisions
+took 2.7\,s (2025) and 1.3\,s (2026), and the cause has not been investigated. Four caveats apply:
 \begin{itemize}
   \item \textbf{The gap alone wins in the last 10 laps}: 0.042 against 0.057 in 2025, and
         0.026 against 0.039 in 2026.
@@ -480,6 +511,40 @@ against a lap of about 80\,s. Four caveats apply:
   \item \textbf{Calls cannot be scored directly.} Teams made other choices, so nothing here
         shows that a call would have gained a place. Five laps before a real stop, the planned
         stop lap is a median 4 laps away from it.
+\end{itemize}
+
+\subsection{Muse Spark answers on unseen races}
+Facts came from nine decisions in three 2026 races, with seven questions each through the real API:
+five with a known numeric answer (one of them a two-part question), one asking why, and one the
+facts cannot answer. The two-part question was added after the model refused one outright, and
+its instructions were changed to fix that before this run.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lc@{}}
+\toprule
+Measure & Result \\
+\midrule
+Known-value questions answered correctly & 45 of 45 \\
+Unanswerable questions refused & 9 of 9 \\
+Explanations returned & 9 of 9 \\
+First attempts quoting a number not in the facts & 0 of 63 \\
+Answers withheld, API errors & 0, 0 \\
+Response time, median (worst) & 2.4\,s (6.1\,s) \\
+\bottomrule
+\end{tabular}
+\caption{Muse Spark 1.3 at minimal reasoning, 63 questions.}
+\end{table}
+
+Three caveats apply:
+\begin{itemize}
+  \item \textbf{The sample is small,} and the known-value test only requires the right number
+        to appear in the reply.
+  \item \textbf{The number check never had to step in during this run,} so its retry and
+        withholding are covered only by tests with fake replies. It also cannot judge reasoning:
+        a wrong statement built from correct numbers would pass.
+  \item \textbf{Explanations mostly restate the engine's numbers.} They are short and accurate,
+        but they compare win chance and time rather than add strategic reasoning.
 \end{itemize}
 
 \section{Assumptions and limitations}
@@ -521,6 +586,8 @@ Live: tyre cliff (0.25\,s per lap past the norm) & Live: safety car and VSC cost
         final gap was about $-38$\,s. Options should be compared with each other rather than
         read as predicted finishing gaps.
   \item Alternative outcomes are simulated counterfactuals, never observed history.
+  \item Race data comes from OpenF1 under CC BY-NC-SA 4.0, so it may not be used commercially.
+        OpenF1 is unofficial and not associated with Formula 1.
 \end{itemize}
 
 \end{document}

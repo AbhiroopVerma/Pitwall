@@ -1,8 +1,0 @@
-numpy
-pandas
-streamlit
-plotly
-fastf1
-
-[dev]
-pytest

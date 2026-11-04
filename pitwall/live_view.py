@@ -254,8 +254,13 @@ def _footer(f: Frame, paint: Paint, width: int, keys: str) -> list[str]:
     return lines
 
 
+def _panel(rows: list[tuple[str, str]], paint: Paint, width: int) -> list[str]:
+    return [paint(style, part) for style, text in rows for part in wrap(text, width)]
+
+
 def render(f: Frame, width: int = 100, height: int = 50, color: bool = True,
-           speed: float | None = None, keys: str = "") -> list[str]:
+           speed: float | None = None, keys: str = "",
+           panel: list[tuple[str, str]] | None = None) -> list[str]:
     """The whole screen as lines. Sections are dropped from the bottom if it will not fit."""
     width = max(MIN_WIDTH, min(width, 110))
     paint = Paint(color)
@@ -270,7 +275,7 @@ def render(f: Frame, width: int = 100, height: int = 50, color: bool = True,
     tyres = [t for t in wrap("TYRES  " + f.tyre_note, width)] if f.tyre_note else []
     footer = _footer(f, paint, width, keys)
     lines = list(top)
-    for section in (options + tyres, battle):
+    for section in (_panel(panel or [], paint, width), options + tyres, battle):
         if section:
             lines += [rule] + section
     used = len(lines) + len(footer) + 1
