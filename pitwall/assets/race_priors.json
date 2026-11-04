@@ -1,0 +1,279 @@
+{
+ "laps_by_circuit": {
+  "Austin": 56,
+  "Baku": 51,
+  "Catalunya": 66,
+  "Hungaroring": 70,
+  "Imola": 63,
+  "Interlagos": 69,
+  "Jeddah": 50,
+  "Las Vegas": 50,
+  "Lusail": 57,
+  "Melbourne": 58,
+  "Mexico City": 71,
+  "Miami": 58,
+  "Monte Carlo": 78,
+  "Montreal": 70,
+  "Monza": 53,
+  "Sakhir": 57,
+  "Shanghai": 56,
+  "Silverstone": 52,
+  "Singapore": 62,
+  "Spa-Francorchamps": 44,
+  "Spielberg": 72,
+  "Suzuka": 53,
+  "Yas Marina Circuit": 58,
+  "Zandvoort": 72
+ },
+ "neutral_continue": {
+  "RED": 0.892,
+  "SC": 0.737,
+  "VSC": 0.377
+ },
+ "neutral_cost_ratio": {
+  "SC": 0.673,
+  "VSC": 0.812
+ },
+ "pace_sd": 0.0,
+ "pace_shrink": 0.8,
+ "pace_tau": 0.0001,
+ "pit_loss_by_circuit": {
+  "Austin": 21.26,
+  "Baku": 21.59,
+  "Catalunya": 22.99,
+  "Hungaroring": 21.03,
+  "Imola": 27.93,
+  "Interlagos": 21.86,
+  "Jeddah": 21.2,
+  "Las Vegas": 23.02,
+  "Lusail": 28.05,
+  "Melbourne": 20.6,
+  "Mexico City": 22.63,
+  "Miami": 19.38,
+  "Monte Carlo": 20.06,
+  "Montreal": 19.92,
+  "Monza": 25.46,
+  "Sakhir": 24.69,
+  "Shanghai": 23.12,
+  "Silverstone": 20.11,
+  "Singapore": 29.37,
+  "Spa-Francorchamps": 18.78,
+  "Spielberg": 21.06,
+  "Suzuka": 22.13,
+  "Yas Marina Circuit": 22.99,
+  "Zandvoort": 23.12
+ },
+ "pit_loss_default": 22.67,
+ "prior_strength": 10.0,
+ "stint_p90": {
+  "Austin": {
+   "HARD": 35,
+   "MEDIUM": 28
+  },
+  "Baku": {
+   "HARD": 49,
+   "MEDIUM": 15
+  },
+  "Catalunya": {
+   "HARD": 31,
+   "MEDIUM": 27,
+   "SOFT": 25
+  },
+  "Hungaroring": {
+   "HARD": 33,
+   "MEDIUM": 29,
+   "SOFT": 15
+  },
+  "Imola": {
+   "HARD": 40,
+   "MEDIUM": 28
+  },
+  "Interlagos": {
+   "MEDIUM": 29,
+   "SOFT": 28
+  },
+  "Jeddah": {
+   "HARD": 43,
+   "MEDIUM": 31,
+   "SOFT": 18
+  },
+  "Las Vegas": {
+   "HARD": 26,
+   "MEDIUM": 17
+  },
+  "Lusail": {
+   "HARD": 23,
+   "MEDIUM": 35,
+   "SOFT": 18
+  },
+  "Melbourne": {
+   "HARD": 34,
+   "SOFT": 7
+  },
+  "Mexico City": {
+   "HARD": 44,
+   "MEDIUM": 31
+  },
+  "Miami": {
+   "HARD": 43,
+   "MEDIUM": 27
+  },
+  "Monte Carlo": {
+   "HARD": 79
+  },
+  "Monza": {
+   "HARD": 36,
+   "MEDIUM": 21
+  },
+  "Sakhir": {
+   "HARD": 26,
+   "SOFT": 20
+  },
+  "Shanghai": {
+   "HARD": 34,
+   "MEDIUM": 19,
+   "SOFT": 18
+  },
+  "Silverstone": {
+   "HARD": 26,
+   "MEDIUM": 33
+  },
+  "Singapore": {
+   "HARD": 40,
+   "MEDIUM": 36
+  },
+  "Spa-Francorchamps": {
+   "HARD": 30,
+   "MEDIUM": 20,
+   "SOFT": 22
+  },
+  "Spielberg": {
+   "HARD": 30,
+   "MEDIUM": 25
+  },
+  "Suzuka": {
+   "HARD": 26,
+   "MEDIUM": 21,
+   "SOFT": 14
+  },
+  "Yas Marina Circuit": {
+   "HARD": 33,
+   "MEDIUM": 25
+  },
+  "Zandvoort": {
+   "HARD": 44,
+   "MEDIUM": 31,
+   "SOFT": 23
+  }
+ },
+ "stint_p90_all": {
+  "HARD": 40,
+  "MEDIUM": 30,
+  "SOFT": 24
+ },
+ "wear_by_circuit": {
+  "Austin": [
+   0.1443,
+   0.0219
+  ],
+  "Baku": [
+   0.0,
+   0.0
+  ],
+  "Catalunya": [
+   0.537,
+   0.0
+  ],
+  "Hungaroring": [
+   0.7367,
+   0.0
+  ],
+  "Imola": [
+   0.7222,
+   0.0
+  ],
+  "Interlagos": [
+   0.4452,
+   0.0
+  ],
+  "Jeddah": [
+   0.0,
+   0.0
+  ],
+  "Las Vegas": [
+   0.0,
+   0.0055
+  ],
+  "Lusail": [
+   0.0,
+   0.0
+  ],
+  "Melbourne": [
+   0.0,
+   0.0
+  ],
+  "Mexico City": [
+   0.4732,
+   0.0
+  ],
+  "Miami": [
+   0.1341,
+   0.0
+  ],
+  "Monte Carlo": [
+   0.0,
+   0.0
+  ],
+  "Montreal": [
+   0.2367,
+   0.0237
+  ],
+  "Monza": [
+   0.1568,
+   0.1808
+  ],
+  "Sakhir": [
+   0.9679,
+   0.0
+  ],
+  "Shanghai": [
+   1.0051,
+   0.0
+  ],
+  "Silverstone": [
+   0.0,
+   0.0044
+  ],
+  "Singapore": [
+   0.0,
+   0.1314
+  ],
+  "Spa-Francorchamps": [
+   0.6408,
+   0.0
+  ],
+  "Spielberg": [
+   0.871,
+   0.0
+  ],
+  "Suzuka": [
+   0.9027,
+   0.0
+  ],
+  "Yas Marina Circuit": [
+   0.4516,
+   0.055
+  ],
+  "Zandvoort": [
+   0.5096,
+   0.0
+  ]
+ },
+ "wear_default": [
+  0.281,
+  0.0
+ ],
+ "win_a": 0.72,
+ "win_b": 0.234,
+ "win_spread": 0.75
+}

@@ -17,7 +17,7 @@ import json
 import numpy as np
 
 from .data import generate_race, load_bundled_replay
-from .degradation import DegradationEstimator
+from .degradation import DegradationEstimator, clean_laps
 from .owncar import OwnCarModel
 from .pit_model import PitHazardModel, WEIGHTS, load_models
 from .optimizer import optimise
@@ -30,6 +30,15 @@ N_SIMS = 1000
 # A slope error compounds over every remaining lap, and short noisy stints can report
 # a very large one. This cap keeps the tails from being set by extrapolation alone.
 MAX_SLOPE_SE = 0.03
+
+
+def stint_laps(history: list, laps_total: int) -> int:
+    """Clean laps in the latest stint, the laps its pace baseline rests on."""
+    kept = clean_laps(history, laps_total)
+    if not kept:
+        return 0
+    latest = kept[-1][1]
+    return sum(1 for _, stint in kept if stint == latest)
 
 
 def _monitor(lap: int, theta: float, reason: str, p3: float = 0.0, fc=None, est=None,
@@ -48,11 +57,29 @@ def decide_at(lap: int, theta: float = 0.5, seed_demo: int = 7,
 def decide_on_replay(replay: Replay, lap: int, theta: float = 0.5,
                      pit: PitHazardModel | None = None, verbose: bool = True,
                      overtake_delta: float = 1.0, n_sims: int = N_SIMS,
-                     pit_dist_override: list[float] | None = None) -> dict:
-    """Full pipeline on any Replay. Never raises for a lap the replay contains."""
+                     pit_dist_override: list[float] | None = None,
+                     always_simulate: bool = False, pit_loss: float | None = None,
+                     stop_costs: list[float] | None = None, neutral: bool | None = None,
+                     pace_shrink: float = 1.0, pace_sd: float = 0.0,
+                     wear_prior: tuple[float, float] | None = None,
+                     prior_strength: float = 0.1, stint_limits: dict | None = None,
+                     pace_tau: float | None = None) -> dict:
+    """Full pipeline on any Replay. Never raises for a lap the replay contains.
+
+    The live terminal sets the optional arguments. ``always_simulate`` keeps our own
+    stop plan current when the rival is not a threat, ``pit_loss`` and ``neutral``
+    replace what these two cars' laps alone can show, and ``pace_shrink`` pulls the
+    measured pace gap towards zero before it is held to the flag. ``wear_prior`` is the
+    wear curve this circuit normally shows. It steers the plan early in a stint, when
+    lap times cannot show wear yet. The hazard model keeps the plain fit it was trained on.
+    """
     if pit is None:
         pit, _ = load_models()
     snap = replay.state_at(lap)  # leakage-free: history <= lap only
+    if pit_loss is not None:
+        snap.pit_loss = pit_loss
+    if neutral is not None:
+        snap.safety_car = neutral
     if snap.laps_left <= 0:
         return _monitor(lap, theta, "race finished")
     if {snap.own.compound, snap.opp.compound} & WET_COMPOUNDS:
@@ -65,7 +92,12 @@ def decide_on_replay(replay: Replay, lap: int, theta: float = 0.5,
     fc = pit.forecast(snap, deg, k=5)
     p3 = fc.p_within[3]
     try:
-        own = OwnCarModel().fit(snap.history_own, replay.laps_total)
+        own = OwnCarModel(ridge=prior_strength, prior=wear_prior).fit(snap.history_own,
+                                                                      replay.laps_total)
+        if wear_prior is not None:
+            deg = DegradationEstimator(ridge=prior_strength, prior=wear_prior).fit(
+                snap.history_opp, replay.laps_total)
+            est = deg.estimate(snap.history_opp, replay.laps_total, lap)
     except ValueError:
         return _monitor(lap, theta, "own-car model not ready: too few clean laps", p3, fc, est)
     loss = expected_loss(p3, own.penalty_at(snap.own.next_age, snap.own.compound),
@@ -81,20 +113,31 @@ def decide_on_replay(replay: Replay, lap: int, theta: float = 0.5,
         print(f"P(pit within 3)={p3:.0%} → {trig.status} ({trig.reason})")
     out: dict = {"lap": lap, "p3": p3, "trigger": trig, "forecast": fc, "est": est,
                  "own_model": own}
-    if not trig.active:
+    if not trig.active and not always_simulate:
         if verbose:
             print("No counter-strategy simulation (monitoring only).")
         return out
     own_slope = min(own.estimate(snap.history_own, replay.laps_total, lap).slope_se, MAX_SLOPE_SE)
+    pace_gap = own.baseline_ - deg.baseline_
+    if pace_tau is not None:
+        # Empirical Bayes. A pace gap from a few laps is mostly noise, one from a long
+        # stint mostly is not, so it is pulled towards the gap over the race so far.
+        # tau is how far the current gap can truly differ from that.
+        noise = (own.resid_std_ ** 2 / max(stint_laps(snap.history_own, replay.laps_total), 1)
+                 + deg.resid_std_ ** 2 / max(stint_laps(snap.history_opp, replay.laps_total), 1))
+        pace_shrink = pace_tau ** 2 / (pace_tau ** 2 + noise)
+        pace_gap -= own.race_baseline_ - deg.race_baseline_
+    adj = 0.5 * (1.0 - pace_shrink) * pace_gap
     inp = SimInputs(
         lap=lap, laps_total=replay.laps_total, gap0=snap.effective_gap,
         pit_loss=snap.pit_loss,
         own=CarInputs(own, snap.own.next_age, None if snap.own.just_pitted else snap.own.compound,
-                      snap.own.must_stop, own.resid_std_, own_slope),
+                      snap.own.must_stop, own.resid_std_, own_slope, -adj, stint_limits),
         opp=CarInputs(deg, snap.opp.next_age, None if snap.opp.just_pitted else snap.opp.compound,
-                      snap.opp.must_stop, deg.resid_std_, min(est.slope_se, MAX_SLOPE_SE)),
+                      snap.opp.must_stop, deg.resid_std_, min(est.slope_se, MAX_SLOPE_SE), adj,
+                      stint_limits),
         pit_dist=pit_dist_override if pit_dist_override is not None else fc.pit_dist,
-        overtake_delta=overtake_delta)
+        overtake_delta=overtake_delta, stop_costs=stop_costs, pace_sd=pace_sd)
     actions = valid_actions(lap, replay.laps_total, snap.own.next_age, snap.own.must_stop, WINDOW)
     results = simulate_actions(inp, actions, n_sims, np.random.default_rng(lap), WINDOW)
     rec = optimise(results, snap.pit_loss, snap.effective_gap, p3, snap.opp.just_pitted)
